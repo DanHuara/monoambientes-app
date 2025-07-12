@@ -209,6 +209,7 @@ const useAppData = () => {
         const newInvoices: Invoice[] = [];
         let currentDate = new Date(fullContract.startDate + 'T12:00:00');
         const endDate = new Date(fullContract.endDate + 'T12:00:00');
+        const contractStartDay = new Date(fullContract.startDate + 'T12:00:00').getDate();
         
         while (currentDate <= endDate) {
             const totalAmount = fullContract.monthlyRent + Object.values(fullContract.additionalCharges).reduce((a, b) => a + b, 0);
@@ -218,7 +219,7 @@ const useAppData = () => {
                 unitId: fullContract.unitId,
                 tenantName: fullContract.tenantName,
                 period: `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`,
-                dueDate: new Date(currentDate.getFullYear(), currentDate.getMonth(), 10).toISOString(),
+                dueDate: new Date(currentDate.getFullYear(), currentDate.getMonth(), contractStartDay).toISOString(),
                 baseRent: fullContract.monthlyRent,
                 additionalCharges: fullContract.additionalCharges,
                 totalAmount: totalAmount,
@@ -268,11 +269,16 @@ const useAppData = () => {
                 tempDate.setMonth(tempDate.getMonth() + 1);
             }
     
+            const contractStartDay = new Date(finalUpdatedContract.startDate + 'T12:00:00').getDate();
+
             invoicesForThisContract.forEach(inv => {
                 if (newContractPeriods.has(inv.period)) {
+                    const [year, month] = inv.period.split('-').map(Number);
                     const newTotalAmount = finalUpdatedContract.monthlyRent + Object.values(finalUpdatedContract.additionalCharges).reduce((a, b) => a + b, 0);
                     let updatedInvoice = { ...inv };
+                    
                     updatedInvoice.tenantName = finalUpdatedContract.tenantName;
+                    updatedInvoice.dueDate = new Date(year, month - 1, contractStartDay).toISOString();
                     
                     if (updatedInvoice.status !== InvoiceStatus.PAID) {
                         const paidAmount = updatedInvoice.totalAmount - updatedInvoice.balance;
@@ -302,7 +308,7 @@ const useAppData = () => {
                     unitId: finalUpdatedContract.unitId,
                     tenantName: finalUpdatedContract.tenantName,
                     period,
-                    dueDate: new Date(year, month - 1, 10).toISOString(),
+                    dueDate: new Date(year, month - 1, contractStartDay).toISOString(),
                     baseRent: finalUpdatedContract.monthlyRent,
                     additionalCharges: finalUpdatedContract.additionalCharges,
                     totalAmount,
