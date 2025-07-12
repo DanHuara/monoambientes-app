@@ -1,5 +1,0 @@
-{
-  "name": "Monoambientes Chamical",
-  "description": "An offline-first rental management application for a small apartment complex. It handles monthly and daily rentals, contracts, payments, reminders, and reports.",
-  "requestFramePermissions": []
-}
