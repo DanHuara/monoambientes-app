@@ -14,13 +14,12 @@ import { getFirestore, enableIndexedDbPersistence, collection, doc, setDoc, addD
 // *  y copia el objeto de configuración de tu aplicación web aquí.                    *
 // ************************************************************************************
 const firebaseConfig = {
-  apiKey: "AIzaSyAX7R4-eHUnjGA8bXAwJJ9U3TgA5ImODk0",
-  authDomain: "gestion-alquileres-85cb5.firebaseapp.com",
-  projectId: "gestion-alquileres-85cb5",
-  storageBucket: "gestion-alquileres-85cb5.firebasestorage.app",
-  messagingSenderId: "593514441418",
-  appId: "1:593514441418:web:9880daee0d769eb2842233",
-  measurementId: "G-PWNFJXZYQ6"
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_AUTH_DOMAIN",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_STORAGE_BUCKET",
+    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+    appId: "YOUR_APP_ID"
 };
 
 const isFirebaseConfigured = firebaseConfig.apiKey !== "YOUR_API_KEY" && firebaseConfig.projectId !== "YOUR_PROJECT_ID";
