@@ -43,12 +43,13 @@ export interface Invoice {
   status: InvoiceStatus;
   payments: Payment[];
   reminderSent: boolean;
+  userId?: string;
 }
 
 export interface Contract {
   id: string;
   unitId: string;
-  tenantName: string;
+  tenantName:string;
   startDate: string; // ISO string
   endDate: string; // ISO string
   monthlyRent: number;
@@ -56,9 +57,11 @@ export interface Contract {
   // New deposit fields
   depositAmount: number;
   depositInstallments: number;
+
   depositBalance: number;
   depositStatus: InvoiceStatus;
   depositPayments: Payment[];
+  userId?: string;
 }
 
 export enum BookingStatus {
@@ -79,6 +82,7 @@ export interface Booking {
   status: BookingStatus;
   balance: number;
   payments: Payment[];
+  userId?: string;
 }
 
 export interface GlobalSettings {
