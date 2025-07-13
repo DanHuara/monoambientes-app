@@ -1,8 +1,9 @@
 
+
 import React, { useState, useEffect, createContext, useContext, useCallback, useMemo } from 'react';
 import { Unit, Contract, Invoice, Booking, GlobalSettings, Payment, UnitType, InvoiceStatus, BookingStatus } from './types';
 import { INITIAL_UNITS, INITIAL_SETTINGS, UNIT_TYPE_LABELS } from './constants';
-import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Mail, LogIn, UserPlus } from 'lucide-react';
+import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Mail, LogIn, UserPlus, AlertTriangle } from 'lucide-react';
 import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, signOut, User } from "firebase/auth";
 import { getFirestore, enableIndexedDbPersistence, collection, doc, setDoc, addDoc, onSnapshot, query, where, writeBatch, deleteDoc, getDocs } from "firebase/firestore";
@@ -98,6 +99,8 @@ function RentalApp() {
         const [bookings, setBookings] = useState<Booking[]>([]);
         const [settings, setSettings] = useState<GlobalSettings>(INITIAL_SETTINGS);
         const [isLoading, setIsLoading] = useState(true);
+        const [dbError, setDbError] = useState<string | null>(null);
+
 
         useEffect(() => {
             if (!user) {
@@ -106,6 +109,7 @@ function RentalApp() {
                 setBookings([]);
                 setSettings(INITIAL_SETTINGS);
                 setIsLoading(false);
+                setDbError(null);
                 return;
             }
 
@@ -118,21 +122,44 @@ function RentalApp() {
                 return onSnapshot(q, (snapshot) => {
                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any;
                     stateSetters[index](data);
+                }, (error) => {
+                    console.error(`Error fetching ${colName}:`, error);
+                    if (error.code === 'permission-denied') {
+                        setDbError('permission-denied');
+                    }
                 });
             });
 
             const settingsDocRef = doc(db, "settings", user.uid);
-            const unsubSettings = onSnapshot(settingsDocRef, (doc) => {
-                if (doc.exists()) {
-                    setSettings(doc.data() as GlobalSettings);
+            const unsubSettings = onSnapshot(settingsDocRef, (docSnapshot) => {
+                if (docSnapshot.exists()) {
+                    setSettings(docSnapshot.data() as GlobalSettings);
+                    if (dbError) setDbError(null);
                 } else {
-                    // If no settings exist for the user, create initial ones
-                    setDoc(settingsDocRef, INITIAL_SETTINGS);
-                    setSettings(INITIAL_SETTINGS);
+                    const initialSettingsWithUser = { ...INITIAL_SETTINGS, userId: user.uid };
+                     setDoc(settingsDocRef, initialSettingsWithUser)
+                        .then(() => {
+                            setSettings(initialSettingsWithUser);
+                            if (dbError) setDbError(null);
+                        })
+                        .catch((error) => {
+                            if (error.code === 'permission-denied') {
+                                console.error("PERMISSION DENIED: Could not create initial user settings. Check Firestore rules.", error);
+                                setDbError('permission-denied');
+                            } else {
+                                console.error("Firestore error on initial settings create:", error);
+                                setDbError('unknown');
+                            }
+                        });
                 }
-                // Mark loading as false only after the last listener is set up
                 setIsLoading(false);
+            }, (error) => {
+                console.error("Error fetching settings:", error);
+                if (error.code === 'permission-denied') {
+                    setDbError('permission-denied');
+                }
             });
+
 
             unsubscribes.push(unsubSettings);
 
@@ -201,7 +228,7 @@ function RentalApp() {
             const originalContract = contracts.find(c => c.id === updatedContract.id);
             if (!originalContract) return;
 
-            let finalUpdatedContract = { ...updatedContract };
+            let finalUpdatedContract = { ...updatedContract, userId: user.uid };
         
             if (originalContract.depositStatus !== InvoiceStatus.PAID && originalContract.monthlyRent !== finalUpdatedContract.monthlyRent) {
                 const paidAmount = originalContract.depositAmount - originalContract.depositBalance;
@@ -240,7 +267,7 @@ function RentalApp() {
                     invoicesToDelete.delete(inv.id); // Keep this invoice, but update it.
                     const [year, month] = inv.period.split('-').map(Number);
                     const newTotalAmount = finalUpdatedContract.monthlyRent + Object.values(finalUpdatedContract.additionalCharges).reduce((a, b) => a + b, 0);
-                    let updatedInvoice = { ...inv };
+                    let updatedInvoice = { ...inv, userId: user.uid };
                     
                     updatedInvoice.tenantName = finalUpdatedContract.tenantName;
                     updatedInvoice.dueDate = new Date(year, month - 1, contractStartDay).toISOString();
@@ -323,7 +350,7 @@ function RentalApp() {
 
         const updateSettings = useCallback(async (newSettings: GlobalSettings) => {
             if (!user) return;
-            await setDoc(doc(db, "settings", user.uid), newSettings);
+            await setDoc(doc(db, "settings", user.uid), {...newSettings, userId: user.uid});
         }, [user]);
 
         const addBooking = useCallback(async (newBookingData: Omit<Booking, 'id' | 'status' | 'balance' | 'payments'>) => {
@@ -383,7 +410,7 @@ function RentalApp() {
             await setDoc(doc(db, "invoices", invoiceId), { reminderSent: true }, { merge: true });
         }, [user]);
 
-        return { units, contracts, invoices, bookings, settings, isLoading, addContract, updateContract, addPayment, addDepositPayment, updateSettings, addBooking, addBookingPayment, deleteContract, deleteBooking, setReminderSent };
+        return { units, contracts, invoices, bookings, settings, isLoading, dbError, addContract, updateContract, addPayment, addDepositPayment, updateSettings, addBooking, addBookingPayment, deleteContract, deleteBooking, setReminderSent };
     };
 
     const AppContext = createContext<ReturnType<typeof useAppData> | null>(null);
@@ -528,7 +555,7 @@ function RentalApp() {
 
                 if (localSettings) {
                     const settingsRef = doc(db, 'settings', user.uid);
-                    batch.set(settingsRef, localSettings);
+                    batch.set(settingsRef, {...localSettings, userId: user.uid});
                 }
 
                 await batch.commit();
@@ -551,6 +578,48 @@ function RentalApp() {
 
         return { requiresMigration, isMigrating, migrateData, dismissMigration };
     };
+
+    // --- ERROR SCREENS ---
+    const FirestoreRulesErrorScreen: React.FC<{ logOut: () => void }> = ({ logOut }) => (
+        <div className="flex items-center justify-center min-h-screen p-4 bg-gray-900 text-gray-100">
+            <div className="max-w-3xl mx-auto bg-gray-800 shadow-2xl rounded-lg p-6 sm:p-8 border border-red-500/50">
+                <div className="text-center">
+                    <AlertTriangle className="w-12 h-12 text-red-400 mx-auto mb-4" />
+                    <h1 className="text-2xl sm:text-3xl font-bold text-red-400 mb-4">Error de Permisos en la Base de Datos</h1>
+                </div>
+                <p className="text-lg mb-6 text-gray-200 text-center">La aplicación no puede acceder a tus datos. Esto casi siempre se debe a que las **Reglas de Seguridad** de Firestore no están configuradas correctamente.</p>
+                <div className="text-left bg-gray-900/50 p-6 rounded-lg space-y-4 border border-gray-700">
+                    <p className="font-bold text-indigo-300">Solución Rápida:</p>
+                    <p>1. Andá a tu <a href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/rules`} target="_blank" rel="noopener noreferrer" className="font-bold text-indigo-400 hover:underline">Consola de Firebase > Firestore > Reglas</a>.</p>
+                    <p>2. Borrá todo el contenido actual y pegá el siguiente código:</p>
+                    <pre className="bg-gray-900 text-gray-200 p-3 rounded-md text-xs overflow-x-auto">
+                        {`rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+    match /settings/{userId} {
+      allow read, update, create: if isOwner(userId);
+    }
+    match /{collection}/{docId} {
+      allow create: if isOwner(request.resource.data.userId);
+      allow read, update, delete: if isOwner(get(/databases/$(database)/documents/$(collection)/$(docId)).data.userId);
+    }
+  }
+}`}
+                    </pre>
+                    <p>3. Hacé clic en **"Publicar"**.</p>
+                </div>
+                <div className="mt-8 flex flex-col items-center gap-4">
+                    <p className="text-gray-400 text-center">Después de publicar las reglas, cerrá esta sesión y volvé a iniciarla.</p>
+                     <Button onClick={logOut} variant="secondary">
+                        <LogOut size={16} /> Cerrar Sesión para Reintentar
+                    </Button>
+                </div>
+            </div>
+        </div>
+    );
 
     // --- VIEWS / PAGES ---
 
@@ -1561,6 +1630,7 @@ function RentalApp() {
     function MainApp() {
         const [view, setView] = useState<View>('DASHBOARD');
         const appData = useApp();
+        const { logOut } = useAuth();
         const { requiresMigration, isMigrating, migrateData, dismissMigration } = useLocalDataMigration();
 
         const renderView = () => {
@@ -1583,6 +1653,10 @@ function RentalApp() {
             );
         }
 
+        if (appData.dbError === 'permission-denied') {
+            return <FirestoreRulesErrorScreen logOut={logOut} />;
+        }
+
         return (
             <div className="min-h-screen bg-gray-900 text-gray-100">
                 {requiresMigration && (
@@ -1600,7 +1674,6 @@ function RentalApp() {
     // This is the container that provides all the contexts.
     const AppContainer = () => {
         const authData = useAuthData();
-        const appData = useAppData();
         
         if (authData.isLoading) {
             return (
@@ -1612,9 +1685,13 @@ function RentalApp() {
         
         return (
             <AuthContext.Provider value={authData}>
-                <AppContext.Provider value={appData}>
-                {authData.user ? <MainApp /> : <LoginScreen />}
-                </AppContext.Provider>
+                {authData.user ? (
+                    <AppContext.Provider value={useAppData()}>
+                        <MainApp />
+                    </AppContext.Provider>
+                ) : (
+                    <LoginScreen />
+                )}
             </AuthContext.Provider>
         );
     }
