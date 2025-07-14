@@ -1,5 +1,6 @@
 
 
+
 import React, { useState, useEffect, createContext, useContext, useCallback, useMemo } from 'react';
 import { Unit, Contract, Invoice, Booking, GlobalSettings, Payment, UnitType, InvoiceStatus, BookingStatus } from './types';
 import { INITIAL_UNITS, INITIAL_SETTINGS, UNIT_TYPE_LABELS } from './constants';
@@ -1554,8 +1555,10 @@ service cloud.firestore {
                     await signIn(email, password);
                 }
             } catch (err: any) {
-                console.error(err);
-                if (err.code === 'auth/email-already-in-use') {
+                console.error("Firebase Auth Error:", err.code, err.message);
+                if (err.code === 'auth/operation-not-allowed') {
+                    setError('Error: Método de inicio de sesión no habilitado. Revisá la configuración de Firebase Authentication.');
+                } else if (err.code === 'auth/email-already-in-use') {
                     setError('Este email ya está registrado.');
                 } else if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
                     setError('Email o contraseña incorrectos.');
@@ -1575,9 +1578,16 @@ service cloud.firestore {
             setIsLoading(true);
             try {
                 await signInWithGoogle();
-            } catch (err) {
-                console.error(err);
-                setError('No se pudo iniciar sesión con Google.');
+            } catch (err: any) {
+                console.error("Firebase Google Auth Error:", err.code, err.message);
+                 if (err.code === 'auth/operation-not-allowed') {
+                    setError('Error: El inicio de sesión con Google no está habilitado. Revisá la configuración de Firebase Authentication.');
+                } else if (err.code === 'auth/popup-closed-by-user') {
+                    setError('Cancelaste el inicio de sesión con Google.');
+                }
+                else {
+                    setError('No se pudo iniciar sesión con Google.');
+                }
             } finally {
                 setIsLoading(false);
             }
@@ -1596,7 +1606,7 @@ service cloud.firestore {
                         <form onSubmit={handleAuthAction} className="space-y-6">
                             <Input label="Email" type="email" value={email} onChange={e => setEmail(e.target.value)} required />
                             <Input label="Contraseña" type="password" value={password} onChange={e => setPassword(e.target.value)} required />
-                            {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+                            {error && <p className="text-red-400 text-sm text-center bg-red-500/10 p-2 rounded-md">{error}</p>}
                             <Button type="submit" className="w-full" disabled={isLoading}>
                                 {isSignUp ? <UserPlus size={16}/> : <LogIn size={16}/>}
                                 {isLoading ? (isSignUp ? 'Creando cuenta...' : 'Iniciando sesión...') : (isSignUp ? 'Crear Cuenta' : 'Iniciar Sesión')}
