@@ -3,9 +3,9 @@ import React, { useState, useEffect, createContext, useContext, useCallback, use
 import { Unit, Contract, Invoice, Booking, GlobalSettings, Payment, UnitType, InvoiceStatus, BookingStatus } from './types';
 import { INITIAL_UNITS, INITIAL_SETTINGS, UNIT_TYPE_LABELS } from './constants';
 import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Mail, LogIn, UserPlus, AlertTriangle } from 'lucide-react';
-import { initializeApp } from "firebase/app";
+import * as firebase from "firebase/app";
 import { getAuth, GoogleAuthProvider, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, signOut, User, deleteUser } from "firebase/auth";
-import { getFirestore, enableIndexedDbPersistence, collection, doc, setDoc, addDoc, onSnapshot, query, where, writeBatch, deleteDoc, getDocs } from "firebase/firestore";
+import { getFirestore, enableIndexedDbPersistence, collection, doc, setDoc, addDoc, onSnapshot, query, where, writeBatch, deleteDoc, getDocs, getDoc } from "firebase/firestore";
 
 // --- FIREBASE SETUP ---
 // ************************************************************************************
@@ -46,7 +46,7 @@ const FirebaseConfigNeeded = () => (
 // It will only be rendered if Firebase is configured correctly.
 function RentalApp() {
     // Initialize Firebase
-    const app = initializeApp(firebaseConfig);
+    const app = firebase.initializeApp(firebaseConfig);
     const auth = getAuth(app);
     const db = getFirestore(app);
     const googleProvider = new GoogleAuthProvider();
@@ -95,8 +95,8 @@ function RentalApp() {
             const user = result.user;
             // Check if user settings exist, if not create them
             const settingsDocRef = doc(db, "settings", user.uid);
-            const settingsSnap = await getDocs(query(collection(db, "settings"), where("userId", "==", user.uid)));
-            if (settingsSnap.empty) {
+            const settingsSnap = await getDoc(settingsDocRef);
+            if (!settingsSnap.exists()) {
                 try {
                     await setDoc(settingsDocRef, { ...INITIAL_SETTINGS, userId: user.uid });
                 } catch(dbError) {
@@ -144,21 +144,29 @@ function RentalApp() {
             }
 
             setIsLoading(true);
-            const collections = ['contracts', 'invoices', 'bookings'];
-            const stateSetters = [setContracts, setInvoices, setBookings];
+            setDbError(null);
 
-            const unsubscribes = collections.map((colName, index) => {
-                const q = query(collection(db, colName), where("userId", "==", user.uid));
-                return onSnapshot(q, (snapshot) => {
-                    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any;
-                    stateSetters[index](data);
-                }, (error) => {
-                    console.error(`Error fetching ${colName}:`, error);
-                    if (error.code === 'permission-denied') {
-                        setDbError('permission-denied');
-                    }
-                });
-            });
+            const handleSnapshotError = (error: any, collectionName: string) => {
+                console.error(`Error fetching ${collectionName}:`, error);
+                if (error.code === 'permission-denied') {
+                    setDbError('permission-denied');
+                }
+            };
+
+            const qContracts = query(collection(db, 'contracts'), where("userId", "==", user.uid));
+            const unsubContracts = onSnapshot(qContracts, (snapshot) => {
+                setContracts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Contract[]);
+            }, (error) => handleSnapshotError(error, 'contracts'));
+
+            const qInvoices = query(collection(db, 'invoices'), where("userId", "==", user.uid));
+            const unsubInvoices = onSnapshot(qInvoices, (snapshot) => {
+                setInvoices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Invoice[]);
+            }, (error) => handleSnapshotError(error, 'invoices'));
+
+            const qBookings = query(collection(db, 'bookings'), where("userId", "==", user.uid));
+            const unsubBookings = onSnapshot(qBookings, (snapshot) => {
+                setBookings(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Booking[]);
+            }, (error) => handleSnapshotError(error, 'bookings'));
 
             const settingsDocRef = doc(db, "settings", user.uid);
             const unsubSettings = onSnapshot(settingsDocRef, (docSnapshot) => {
@@ -166,19 +174,18 @@ function RentalApp() {
                     setSettings(docSnapshot.data() as GlobalSettings);
                     if (dbError) setDbError(null);
                 }
-                 // Settings are now created at sign-up, so this branch is for safety.
                 setIsLoading(false);
             }, (error) => {
-                console.error("Error fetching settings:", error);
-                if (error.code === 'permission-denied') {
-                    setDbError('permission-denied');
-                }
+                handleSnapshotError(error, 'settings');
+                setIsLoading(false);
             });
 
-
-            unsubscribes.push(unsubSettings);
-
-            return () => unsubscribes.forEach(unsub => unsub());
+            return () => {
+                unsubContracts();
+                unsubInvoices();
+                unsubBookings();
+                unsubSettings();
+            };
 
         }, [user]);
         
