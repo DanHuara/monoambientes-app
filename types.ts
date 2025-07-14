@@ -43,7 +43,6 @@ export interface Invoice {
   status: InvoiceStatus;
   payments: Payment[];
   reminderSent: boolean;
-  userId?: string;
 }
 
 export interface Contract {
@@ -61,7 +60,6 @@ export interface Contract {
   depositBalance: number;
   depositStatus: InvoiceStatus;
   depositPayments: Payment[];
-  userId?: string;
 }
 
 export enum BookingStatus {
@@ -82,7 +80,6 @@ export interface Booking {
   status: BookingStatus;
   balance: number;
   payments: Payment[];
-  userId?: string;
 }
 
 export interface GlobalSettings {
