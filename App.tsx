@@ -1,12 +1,10 @@
 
-
-
 import React, { useState, useEffect, createContext, useContext, useCallback, useMemo } from 'react';
 import { Unit, Contract, Invoice, Booking, GlobalSettings, Payment, UnitType, InvoiceStatus, BookingStatus } from './types';
 import { INITIAL_UNITS, INITIAL_SETTINGS, UNIT_TYPE_LABELS } from './constants';
 import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Mail, LogIn, UserPlus, AlertTriangle } from 'lucide-react';
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, signOut, User } from "firebase/auth";
+import { getAuth, GoogleAuthProvider, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, signOut, User, deleteUser } from "firebase/auth";
 import { getFirestore, enableIndexedDbPersistence, collection, doc, setDoc, addDoc, onSnapshot, query, where, writeBatch, deleteDoc, getDocs } from "firebase/firestore";
 
 // --- FIREBASE SETUP ---
@@ -76,9 +74,40 @@ function RentalApp() {
             return () => unsubscribe();
         }, []);
 
-        const signUp = (email, password) => createUserWithEmailAndPassword(auth, email, password);
+        const signUp = async (email, password) => {
+            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            const newUser = userCredential.user;
+            try {
+                // Atomic operation: Create user settings immediately.
+                const settingsDocRef = doc(db, "settings", newUser.uid);
+                await setDoc(settingsDocRef, { ...INITIAL_SETTINGS, userId: newUser.uid });
+                return userCredential;
+            } catch (dbError) {
+                // If firestore fails, rollback auth user creation
+                await deleteUser(newUser);
+                // re-throw the database error to be caught by the UI
+                throw dbError;
+            }
+        };
+
+        const signInWithGoogle = async () => {
+            const result = await signInWithPopup(auth, googleProvider);
+            const user = result.user;
+            // Check if user settings exist, if not create them
+            const settingsDocRef = doc(db, "settings", user.uid);
+            const settingsSnap = await getDocs(query(collection(db, "settings"), where("userId", "==", user.uid)));
+            if (settingsSnap.empty) {
+                try {
+                    await setDoc(settingsDocRef, { ...INITIAL_SETTINGS, userId: user.uid });
+                } catch(dbError) {
+                     await deleteUser(user);
+                     throw dbError;
+                }
+            }
+            return result;
+        };
+
         const signIn = (email, password) => signInWithEmailAndPassword(auth, email, password);
-        const signInWithGoogle = () => signInWithPopup(auth, googleProvider);
         const logOut = () => signOut(auth);
 
         return { user, isLoading, signUp, signIn, signInWithGoogle, logOut };
@@ -136,23 +165,8 @@ function RentalApp() {
                 if (docSnapshot.exists()) {
                     setSettings(docSnapshot.data() as GlobalSettings);
                     if (dbError) setDbError(null);
-                } else {
-                    const initialSettingsWithUser = { ...INITIAL_SETTINGS, userId: user.uid };
-                     setDoc(settingsDocRef, initialSettingsWithUser)
-                        .then(() => {
-                            setSettings(initialSettingsWithUser);
-                            if (dbError) setDbError(null);
-                        })
-                        .catch((error) => {
-                            if (error.code === 'permission-denied') {
-                                console.error("PERMISSION DENIED: Could not create initial user settings. Check Firestore rules.", error);
-                                setDbError('permission-denied');
-                            } else {
-                                console.error("Firestore error on initial settings create:", error);
-                                setDbError('unknown');
-                            }
-                        });
                 }
+                 // Settings are now created at sign-up, so this branch is for safety.
                 setIsLoading(false);
             }, (error) => {
                 console.error("Error fetching settings:", error);
@@ -491,93 +505,6 @@ function RentalApp() {
             [BookingStatus.PAID]: 'bg-green-500/20 text-green-300',
         };
         return <span className={`px-2 py-1 text-xs font-semibold rounded-full ${styles[status]}`}>{status}</span>;
-    };
-
-    // --- DATA MIGRATION ---
-    const DataMigrationPrompt: React.FC<{ onMigrate: () => void; onDismiss: () => void; isMigrating: boolean; }> = ({ onMigrate, onDismiss, isMigrating }) => (
-        <Modal isOpen={true} onClose={onDismiss} title="Sincronizar Datos con la Nube">
-            <div className="space-y-4">
-                <p className="text-gray-300">Hemos detectado datos guardados previamente en este dispositivo.</p>
-                <p className="font-semibold text-white">¿Querés subirlos a tu nueva cuenta para acceder a ellos desde cualquier lugar?</p>
-                <p className="text-sm text-gray-400">Esta acción solo se preguntará una vez por dispositivo.</p>
-            </div>
-            <div className="flex justify-end gap-2 pt-6">
-                <Button onClick={onDismiss} variant="secondary" type="button" disabled={isMigrating}>
-                    Ignorar en este dispositivo
-                </Button>
-                <Button onClick={onMigrate} type="button" disabled={isMigrating}>
-                    {isMigrating ? "Sincronizando..." : "Sí, Sincronizar Datos"}
-                </Button>
-            </div>
-        </Modal>
-    );
-
-    const useLocalDataMigration = () => {
-        const { user } = useAuth();
-        const [requiresMigration, setRequiresMigration] = useState(false);
-        const [isMigrating, setIsMigrating] = useState(false);
-        
-        useEffect(() => {
-            if (!user) return;
-            
-            const localContracts = localStorage.getItem('contracts');
-            const migrationDone = localStorage.getItem(`migration_done_${user.uid}`);
-            
-            if (localContracts && localContracts.length > 2 && !migrationDone) {
-                setRequiresMigration(true);
-            }
-
-        }, [user]);
-
-        const migrateData = async () => {
-            if (!user) return;
-            
-            setIsMigrating(true);
-            try {
-                const localContracts = JSON.parse(localStorage.getItem('contracts') || '[]');
-                const localInvoices = JSON.parse(localStorage.getItem('invoices') || '[]');
-                const localBookings = JSON.parse(localStorage.getItem('bookings') || '[]');
-                const localSettings = JSON.parse(localStorage.getItem('settings') || 'null');
-                
-                const batch = writeBatch(db);
-
-                localContracts.forEach(c => {
-                    const docRef = doc(db, 'contracts', c.id);
-                    batch.set(docRef, {...c, userId: user.uid });
-                });
-                localInvoices.forEach(i => {
-                    const docRef = doc(db, 'invoices', i.id);
-                    batch.set(docRef, {...i, userId: user.uid });
-                });
-                localBookings.forEach(b => {
-                    const docRef = doc(db, 'bookings', b.id);
-                    batch.set(docRef, {...b, userId: user.uid });
-                });
-
-                if (localSettings) {
-                    const settingsRef = doc(db, 'settings', user.uid);
-                    batch.set(settingsRef, {...localSettings, userId: user.uid});
-                }
-
-                await batch.commit();
-
-                localStorage.setItem(`migration_done_${user.uid}`, 'true');
-                setRequiresMigration(false);
-            } catch (error) {
-                console.error("Data migration failed:", error);
-                alert("Hubo un error al sincronizar los datos. Por favor, intentá de nuevo.");
-            } finally {
-                setIsMigrating(false);
-            }
-        };
-
-        const dismissMigration = () => {
-            if (!user) return;
-            localStorage.setItem(`migration_done_${user.uid}`, 'true');
-            setRequiresMigration(false);
-        };
-
-        return { requiresMigration, isMigrating, migrateData, dismissMigration };
     };
 
     // --- ERROR SCREENS ---
@@ -1352,7 +1279,10 @@ service cloud.firestore {
         const exportToCSV = () => {
             if (!reportData) return;
             const header = 'Fecha,Departamento,Tipo,Descripción,Monto\n';
-            const rows = reportData.map(r => `${r.date},"${r.department}","${r.type}","${r.description}",${r.amount}`).join('\n');
+            const rows = reportData.map(r => {
+                const description = r.description.replace(/"/g, '""'); // Escape double quotes
+                return `${r.date},"${r.department}","${r.type}","${description}",${r.amount}`;
+            }).join('\n');
             const csvContent = "data:text/csv;charset=utf-8," + '\uFEFF' + header + rows;
             const encodedUri = encodeURI(csvContent);
             const link = document.createElement("a");
@@ -1382,7 +1312,7 @@ service cloud.firestore {
                     <body>
                         <header>
                             <h1>Monoambientes Chamical</h1>
-                            <p>Reporte de pagos y vencimientos</p>
+                            <p>Reporte de Pagos</p>
                             <p>Generado el: ${new Date().toLocaleDateString()}</p>
                         </header>
                         <table>
@@ -1451,7 +1381,7 @@ service cloud.firestore {
                                             <th className="p-3">Departamento</th>
                                             <th className="p-3">Tipo</th>
                                             <th className="p-3">Descripción</th>
-                                            <th className="p-3">Monto</th>
+                                            <th className="p-3 text-right">Monto</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1461,7 +1391,7 @@ service cloud.firestore {
                                                 <td className="p-3">{row.department}</td>
                                                 <td className="p-3">{row.type}</td>
                                                 <td className="p-3">{row.description}</td>
-                                                <td className="p-3">${row.amount.toLocaleString()}</td>
+                                                <td className="p-3 text-right">${row.amount.toLocaleString()}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -1555,18 +1485,19 @@ service cloud.firestore {
                     await signIn(email, password);
                 }
             } catch (err: any) {
-                console.error("Firebase Auth Error:", err.code, err.message);
-                if (err.code === 'auth/operation-not-allowed') {
-                    setError('Error: Método de inicio de sesión no habilitado. Revisá la configuración de Firebase Authentication.');
+                console.error("Firebase Auth/DB Error:", err.code, err.message);
+                if (err.code === 'permission-denied') {
+                    setError('Error de Permisos. Revisá las Reglas de Seguridad en Firestore.');
+                } else if (err.code === 'auth/operation-not-allowed') {
+                    setError('Método de inicio de sesión no habilitado en Firebase.');
                 } else if (err.code === 'auth/email-already-in-use') {
                     setError('Este email ya está registrado.');
-                } else if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+                } else if (err.code === 'auth/invalid-credential') {
                     setError('Email o contraseña incorrectos.');
                 } else if (err.code === 'auth/weak-password') {
                     setError('La contraseña debe tener al menos 6 caracteres.');
-                }
-                else {
-                    setError('Ocurrió un error. Intentá de nuevo.');
+                } else {
+                    setError('Ocurrió un error. Verificá tu configuración y las reglas de seguridad.');
                 }
             } finally {
                 setIsLoading(false);
@@ -1579,13 +1510,14 @@ service cloud.firestore {
             try {
                 await signInWithGoogle();
             } catch (err: any) {
-                console.error("Firebase Google Auth Error:", err.code, err.message);
-                 if (err.code === 'auth/operation-not-allowed') {
-                    setError('Error: El inicio de sesión con Google no está habilitado. Revisá la configuración de Firebase Authentication.');
+                console.error("Firebase Google Auth/DB Error:", err.code, err.message);
+                 if (err.code === 'permission-denied') {
+                    setError('Error de Permisos. Revisá las Reglas de Seguridad en Firestore.');
+                 } else if (err.code === 'auth/operation-not-allowed') {
+                    setError('El inicio de sesión con Google no está habilitado en Firebase.');
                 } else if (err.code === 'auth/popup-closed-by-user') {
-                    setError('Cancelaste el inicio de sesión con Google.');
-                }
-                else {
+                    // Don't show an error for this.
+                } else {
                     setError('No se pudo iniciar sesión con Google.');
                 }
             } finally {
@@ -1641,7 +1573,6 @@ service cloud.firestore {
         const [view, setView] = useState<View>('DASHBOARD');
         const appData = useApp();
         const { logOut } = useAuth();
-        const { requiresMigration, isMigrating, migrateData, dismissMigration } = useLocalDataMigration();
 
         const renderView = () => {
             switch (view) {
@@ -1669,13 +1600,6 @@ service cloud.firestore {
 
         return (
             <div className="min-h-screen bg-gray-900 text-gray-100">
-                {requiresMigration && (
-                    <DataMigrationPrompt 
-                        onMigrate={migrateData} 
-                        onDismiss={dismissMigration} 
-                        isMigrating={isMigrating} 
-                    />
-                )}
                 {renderView()}
             </div>
         );
