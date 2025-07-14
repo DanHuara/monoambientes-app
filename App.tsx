@@ -3,32 +3,9 @@ import React, { useState, useEffect, createContext, useContext, useCallback, use
 import { Unit, Contract, Invoice, Booking, GlobalSettings, Payment, UnitType, InvoiceStatus, BookingStatus } from './types';
 import { INITIAL_UNITS, INITIAL_SETTINGS, UNIT_TYPE_LABELS } from './constants';
 import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Mail, LogIn, UserPlus, AlertTriangle } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { 
-    getAuth, 
-    GoogleAuthProvider, 
-    onAuthStateChanged,
-    type User,
-    createUserWithEmailAndPassword,
-    signInWithEmailAndPassword,
-    signInWithPopup,
-    signOut,
-} from 'firebase/auth';
-import { 
-    getFirestore, 
-    enableIndexedDbPersistence,
-    collection,
-    query,
-    where,
-    onSnapshot,
-    doc,
-    setDoc,
-    getDoc,
-    getDocs,
-    writeBatch,
-    updateDoc,
-    deleteDoc,
-} from 'firebase/firestore';
+import firebase from 'firebase/compat/app';
+import 'firebase/compat/auth';
+import 'firebase/compat/firestore';
 
 
 // --- FIREBASE SETUP ---
@@ -70,13 +47,15 @@ const FirebaseConfigNeeded = () => (
 // It will only be rendered if Firebase is configured correctly.
 function RentalApp() {
     // Initialize Firebase
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
-    const googleProvider = new GoogleAuthProvider();
+    if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+    }
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    const googleProvider = new firebase.auth.GoogleAuthProvider();
 
     // Enable offline persistence
-    enableIndexedDbPersistence(db)
+    db.enablePersistence()
       .catch((err) => {
         if (err.code == 'failed-precondition') {
           console.warn("Firestore persistence failed: multiple tabs open.");
@@ -87,11 +66,11 @@ function RentalApp() {
 
     // --- AUTH HOOK AND CONTEXT ---
     const useAuthData = () => {
-        const [user, setUser] = useState<User | null>(null);
+        const [user, setUser] = useState<firebase.User | null>(null);
         const [isLoading, setIsLoading] = useState(true);
 
         useEffect(() => {
-            const unsubscribe = onAuthStateChanged(auth, (user) => {
+            const unsubscribe = auth.onAuthStateChanged((user) => {
                 setUser(user);
                 setIsLoading(false);
             });
@@ -99,14 +78,14 @@ function RentalApp() {
         }, []);
 
         const signUp = async (email: string, password: string) => {
-            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            const userCredential = await auth.createUserWithEmailAndPassword(email, password);
             const newUser = userCredential.user;
             if (!newUser) throw new Error("User creation failed.");
 
             try {
                 // Atomic operation: Create user settings immediately.
-                const settingsDocRef = doc(db, "settings", newUser.uid);
-                await setDoc(settingsDocRef, { ...INITIAL_SETTINGS, userId: newUser.uid });
+                const settingsDocRef = db.collection("settings").doc(newUser.uid);
+                await settingsDocRef.set({ ...INITIAL_SETTINGS, userId: newUser.uid });
                 return userCredential;
             } catch (dbError) {
                 // If firestore fails, rollback auth user creation
@@ -117,16 +96,16 @@ function RentalApp() {
         };
 
         const signInWithGoogle = async () => {
-            const result = await signInWithPopup(auth, googleProvider);
+            const result = await auth.signInWithPopup(googleProvider);
             const user = result.user;
             if (!user) throw new Error("Google Sign in failed.");
 
             // Check if user settings exist, if not create them
-            const settingsDocRef = doc(db, "settings", user.uid);
-            const settingsSnap = await getDoc(settingsDocRef);
-            if (!settingsSnap.exists()) {
+            const settingsDocRef = db.collection("settings").doc(user.uid);
+            const settingsSnap = await settingsDocRef.get();
+            if (!settingsSnap.exists) {
                 try {
-                    await setDoc(settingsDocRef, { ...INITIAL_SETTINGS, userId: user.uid });
+                    await settingsDocRef.set({ ...INITIAL_SETTINGS, userId: user.uid });
                 } catch(dbError) {
                      await user.delete();
                      throw dbError;
@@ -135,8 +114,8 @@ function RentalApp() {
             return result;
         };
 
-        const signIn = (email: string, password: string) => signInWithEmailAndPassword(auth, email, password);
-        const logOut = () => signOut(auth);
+        const signIn = (email: string, password: string) => auth.signInWithEmailAndPassword(email, password);
+        const logOut = () => auth.signOut();
 
         return { user, isLoading, signUp, signIn, signInWithGoogle, logOut };
     };
@@ -181,24 +160,24 @@ function RentalApp() {
                 }
             };
 
-            const qContracts = query(collection(db, 'contracts'), where("userId", "==", user.uid));
-            const unsubContracts = onSnapshot(qContracts, (snapshot) => {
+            const qContracts = db.collection('contracts').where("userId", "==", user.uid);
+            const unsubContracts = qContracts.onSnapshot((snapshot) => {
                 setContracts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Contract[]);
             }, (error) => handleSnapshotError(error, 'contracts'));
 
-            const qInvoices = query(collection(db, 'invoices'), where("userId", "==", user.uid));
-            const unsubInvoices = onSnapshot(qInvoices, (snapshot) => {
+            const qInvoices = db.collection('invoices').where("userId", "==", user.uid);
+            const unsubInvoices = qInvoices.onSnapshot((snapshot) => {
                 setInvoices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Invoice[]);
             }, (error) => handleSnapshotError(error, 'invoices'));
 
-            const qBookings = query(collection(db, 'bookings'), where("userId", "==", user.uid));
-            const unsubBookings = onSnapshot(qBookings, (snapshot) => {
+            const qBookings = db.collection('bookings').where("userId", "==", user.uid);
+            const unsubBookings = qBookings.onSnapshot((snapshot) => {
                 setBookings(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Booking[]);
             }, (error) => handleSnapshotError(error, 'bookings'));
 
-            const settingsDocRef = doc(db, "settings", user.uid);
-            const unsubSettings = onSnapshot(settingsDocRef, (docSnapshot) => {
-                if (docSnapshot.exists()) {
+            const settingsDocRef = db.collection("settings").doc(user.uid);
+            const unsubSettings = settingsDocRef.onSnapshot((docSnapshot) => {
+                if (docSnapshot.exists) {
                     setSettings(docSnapshot.data() as GlobalSettings);
                     if (dbError) setDbError(null);
                 }
@@ -230,7 +209,7 @@ function RentalApp() {
                 userId: user.uid,
             };
 
-            const contractDocRef = doc(db, "contracts", id);
+            const contractDocRef = db.collection("contracts").doc(id);
             
             // Generate invoices
             const newInvoices: Omit<Invoice, 'id'>[] = [];
@@ -258,11 +237,11 @@ function RentalApp() {
                 currentDate.setMonth(currentDate.getMonth() + 1);
             }
 
-            const batch = writeBatch(db);
+            const batch = db.batch();
             batch.set(contractDocRef, fullContract);
             newInvoices.forEach(inv => {
                 const invId = `invoice-${id}-${new Date(inv.period+'-02').getTime()}`;
-                batch.set(doc(db, "invoices", invId), inv);
+                batch.set(db.collection("invoices").doc(invId), inv);
             });
 
             await batch.commit();
@@ -272,9 +251,9 @@ function RentalApp() {
         const updateContract = useCallback(async (updatedContract: Contract) => {
             if (!user) return;
             
-            const batch = writeBatch(db);
+            const batch = db.batch();
 
-            const contractDocRef = doc(db, "contracts", updatedContract.id);
+            const contractDocRef = db.collection("contracts").doc(updatedContract.id);
             const originalContract = contracts.find(c => c.id === updatedContract.id);
             if (!originalContract) return;
 
@@ -296,8 +275,8 @@ function RentalApp() {
         
             batch.set(contractDocRef, finalUpdatedContract);
             
-            const q = query(collection(db, "invoices"), where("contractId", "==", updatedContract.id), where("userId", "==", user.uid));
-            const invoicesSnapshot = await getDocs(q);
+            const q = db.collection("invoices").where("contractId", "==", updatedContract.id).where("userId", "==", user.uid);
+            const invoicesSnapshot = await q.get();
             const invoicesForThisContract = invoicesSnapshot.docs.map(d => ({id: d.id, ...d.data()})) as Invoice[];
             
             const newContractPeriods = new Set<string>();
@@ -336,18 +315,18 @@ function RentalApp() {
                             status: newStatus,
                         };
                     }
-                    batch.set(doc(db, "invoices", inv.id), updatedInvoice);
+                    batch.set(db.collection("invoices").doc(inv.id), updatedInvoice);
                     newContractPeriods.delete(inv.period);
                 }
             });
             
-            invoicesToDelete.forEach(id => batch.delete(doc(db, "invoices", id)));
+            invoicesToDelete.forEach(id => batch.delete(db.collection("invoices").doc(id)));
             
             newContractPeriods.forEach(period => {
                 const [year, month] = period.split('-').map(Number);
                 const totalAmount = finalUpdatedContract.monthlyRent + Object.values(finalUpdatedContract.additionalCharges).reduce((a, b) => a + b, 0);
                 const newInvoiceId = `invoice-${finalUpdatedContract.id}-${new Date(year, month - 1).getTime()}`;
-                batch.set(doc(db, "invoices", newInvoiceId), {
+                batch.set(db.collection("invoices").doc(newInvoiceId), {
                     id: newInvoiceId,
                     contractId: finalUpdatedContract.id,
                     unitId: finalUpdatedContract.unitId,
@@ -381,8 +360,8 @@ function RentalApp() {
             if (balance <= 0) status = InvoiceStatus.PAID;
             if (paidAmount === 0) status = InvoiceStatus.PENDING;
             
-            const invoiceDocRef = doc(db, "invoices", invoiceId);
-            await updateDoc(invoiceDocRef, { payments: newPayments, balance, status });
+            const invoiceDocRef = db.collection("invoices").doc(invoiceId);
+            await invoiceDocRef.update({ payments: newPayments, balance, status });
         }, [user, invoices]);
 
         const addDepositPayment = useCallback(async (contractId: string, payment: Omit<Payment, 'id'>) => {
@@ -396,14 +375,14 @@ function RentalApp() {
             let status = InvoiceStatus.PARTIAL;
             if (balance <= 0) status = InvoiceStatus.PAID;
             
-            const contractDocRef = doc(db, "contracts", contractId);
-            await updateDoc(contractDocRef, { depositPayments: newPayments, depositBalance: balance, depositStatus: status });
+            const contractDocRef = db.collection("contracts").doc(contractId);
+            await contractDocRef.update({ depositPayments: newPayments, depositBalance: balance, depositStatus: status });
         }, [user, contracts]);
 
         const updateSettings = useCallback(async (newSettings: GlobalSettings) => {
             if (!user) return;
-            const settingsDocRef = doc(db, "settings", user.uid);
-            await setDoc(settingsDocRef, {...newSettings, userId: user.uid});
+            const settingsDocRef = db.collection("settings").doc(user.uid);
+            await settingsDocRef.set({...newSettings, userId: user.uid});
         }, [user]);
 
         const addBooking = useCallback(async (newBookingData: Omit<Booking, 'id' | 'status' | 'balance' | 'payments' | 'userId'>) => {
@@ -416,7 +395,7 @@ function RentalApp() {
                 status: BookingStatus.PENDING,
                 userId: user.uid,
             };
-            await setDoc(doc(db, "bookings", id), fullBooking);
+            await db.collection("bookings").doc(id).set(fullBooking);
         }, [user]);
         
         const addBookingPayment = useCallback(async (bookingId: string, payment: Omit<Payment, 'id'>) => {
@@ -434,19 +413,19 @@ function RentalApp() {
                 status = BookingStatus.PENDING;
             }
             
-            const bookingDocRef = doc(db, "bookings", bookingId);
-            await updateDoc(bookingDocRef, { payments: newPayments, balance, status });
+            const bookingDocRef = db.collection("bookings").doc(bookingId);
+            await bookingDocRef.update({ payments: newPayments, balance, status });
         }, [user, bookings]);
 
         const deleteContract = useCallback(async (contractId: string) => {
             if (!user) return;
-            const batch = writeBatch(db);
+            const batch = db.batch();
             
-            const contractDocRef = doc(db, "contracts", contractId);
+            const contractDocRef = db.collection("contracts").doc(contractId);
             batch.delete(contractDocRef);
             
-            const q = query(collection(db, "invoices"), where("contractId", "==", contractId), where("userId", "==", user.uid));
-            const invoicesSnapshot = await getDocs(q);
+            const q = db.collection("invoices").where("contractId", "==", contractId).where("userId", "==", user.uid);
+            const invoicesSnapshot = await q.get();
             invoicesSnapshot.forEach(invoiceDoc => {
                 batch.delete(invoiceDoc.ref);
             });
@@ -456,12 +435,12 @@ function RentalApp() {
 
         const deleteBooking = useCallback(async (bookingId: string) => {
             if (!user) return;
-            await deleteDoc(doc(db, "bookings", bookingId));
+            await db.collection("bookings").doc(bookingId).delete();
         }, [user]);
 
         const setReminderSent = useCallback(async (invoiceId: string) => {
             if (!user) return;
-            await updateDoc(doc(db, "invoices", invoiceId), { reminderSent: true });
+            await db.collection("invoices").doc(invoiceId).update({ reminderSent: true });
         }, [user]);
 
         return { units, contracts, invoices, bookings, settings, isLoading, dbError, addContract, updateContract, addPayment, addDepositPayment, updateSettings, addBooking, addBookingPayment, deleteContract, deleteBooking, setReminderSent };
@@ -547,53 +526,56 @@ function RentalApp() {
     };
 
     // --- ERROR SCREENS ---
-    const FirestoreRulesErrorScreen: React.FC<{ logOut: () => void }> = ({ logOut }) => (
-        <div className="flex items-center justify-center min-h-screen p-4 bg-gray-900 text-gray-100">
-            <div className="max-w-3xl mx-auto bg-gray-800 shadow-2xl rounded-lg p-6 sm:p-8 border border-red-500/50">
-                <div className="text-center">
-                    <AlertTriangle className="w-12 h-12 text-red-400 mx-auto mb-4" />
-                    <h1 className="text-2xl sm:text-3xl font-bold text-red-400 mb-4">Error de Permisos en la Base de Datos</h1>
-                </div>
-                <p className="text-lg mb-6 text-gray-200 text-center">La aplicación no puede acceder a tus datos. Esto casi siempre se debe a que las **Reglas de Seguridad** de Firestore no están configuradas correctamente.</p>
-                <div className="text-left bg-gray-900/50 p-6 rounded-lg space-y-4 border border-gray-700">
-                    <p className="font-bold text-indigo-300">Solución Rápida:</p>
-                    <p>1. Andá a tu <a href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/rules`} target="_blank" rel="noopener noreferrer" className="font-bold text-indigo-400 hover:underline">Consola de Firebase > Firestore > Reglas</a>.</p>
-                    <p>2. Borrá todo el contenido actual y pegá el siguiente código:</p>
-                    <pre className="bg-gray-900 text-gray-200 p-3 rounded-md text-xs overflow-x-auto">
-                        {`rules_version = '2';
+    const FirestoreRulesErrorScreen: React.FC<{ logOut: () => void }> = ({ logOut }) => {
+        const correctRules = `rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Legacy v8 rules - adjust if using v9 modular SDK and security rules
-    match /{document=**} {
-      allow read, write: if request.auth != null;
-    }
-    // More secure v8 rules:
-    /*
+
     function isOwner(userId) {
       return request.auth != null && request.auth.uid == userId;
     }
+
     match /settings/{userId} {
-       allow read, update, create: if isOwner(userId);
+      allow read, update, create: if isOwner(userId);
     }
+    
     match /{collection}/{docId} {
+      // Allow creation if the user is the owner
       allow create: if isOwner(request.resource.data.userId);
+
+      // Allow read, update, delete if the user is the owner
       allow read, update, delete: if isOwner(resource.data.userId);
     }
-    */
   }
-}`}
-                    </pre>
-                    <p>3. Hacé clic en **"Publicar"**.</p>
-                </div>
-                <div className="mt-8 flex flex-col items-center gap-4">
-                    <p className="text-gray-400 text-center">Después de publicar las reglas, cerrá esta sesión y volvé a iniciarla.</p>
-                     <Button onClick={logOut} variant="secondary">
-                        <LogOut size={16} /> Cerrar Sesión para Reintentar
-                    </Button>
+}`;
+        
+        return (
+            <div className="flex items-center justify-center min-h-screen p-4 bg-gray-900 text-gray-100">
+                <div className="max-w-3xl mx-auto bg-gray-800 shadow-2xl rounded-lg p-6 sm:p-8 border border-red-500/50">
+                    <div className="text-center">
+                        <AlertTriangle className="w-12 h-12 text-red-400 mx-auto mb-4" />
+                        <h1 className="text-2xl sm:text-3xl font-bold text-red-400 mb-4">Error de Permisos en la Base de Datos</h1>
+                    </div>
+                    <p className="text-lg mb-6 text-gray-200 text-center">La aplicación no puede acceder a tus datos. Esto casi siempre se debe a que las **Reglas de Seguridad** de Firestore no están configuradas correctamente.</p>
+                    <div className="text-left bg-gray-900/50 p-6 rounded-lg space-y-4 border border-gray-700">
+                        <p className="font-bold text-indigo-300">Solución Rápida:</p>
+                        <p>1. Andá a tu <a href={`https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/rules`} target="_blank" rel="noopener noreferrer" className="font-bold text-indigo-400 hover:underline">Consola de Firebase > Firestore > Reglas</a>.</p>
+                        <p>2. Borrá todo el contenido actual y pegá el siguiente código:</p>
+                        <pre className="bg-gray-900 text-gray-200 p-3 rounded-md text-xs overflow-x-auto">
+                            {correctRules}
+                        </pre>
+                        <p>3. Hacé clic en **"Publicar"**.</p>
+                    </div>
+                    <div className="mt-8 flex flex-col items-center gap-4">
+                        <p className="text-gray-400 text-center">Después de publicar las reglas, cerrá esta sesión y volvé a iniciarla.</p>
+                         <Button onClick={logOut} variant="secondary">
+                            <LogOut size={16} /> Cerrar Sesión para Reintentar
+                        </Button>
+                    </div>
                 </div>
             </div>
-        </div>
-    );
+        );
+    }
 
     // --- VIEWS / PAGES ---
 
