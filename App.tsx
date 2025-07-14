@@ -13,7 +13,7 @@ import { getFirestore, enableIndexedDbPersistence, collection, doc, setDoc, addD
 // *  Ve a la consola de Firebase > Configuración del Proyecto > General                *
 // *  y copia el objeto de configuración de tu aplicación web aquí.                    *
 // ************************************************************************************
-const firebaseConfig = {
+const firebaseConfig ={
   apiKey: "AIzaSyAX7R4-eHUnjGA8bXAwJJ9U3TgA5ImODk0",
   authDomain: "gestion-alquileres-85cb5.firebaseapp.com",
   projectId: "gestion-alquileres-85cb5",
