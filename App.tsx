@@ -3,9 +3,33 @@ import React, { useState, useEffect, createContext, useContext, useCallback, use
 import { Unit, Contract, Invoice, Booking, GlobalSettings, Payment, UnitType, InvoiceStatus, BookingStatus } from './types';
 import { INITIAL_UNITS, INITIAL_SETTINGS, UNIT_TYPE_LABELS } from './constants';
 import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Mail, LogIn, UserPlus, AlertTriangle } from 'lucide-react';
-import * as firebase from "firebase/app";
-import { getAuth, GoogleAuthProvider, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signInWithPopup, signOut, User, deleteUser } from "firebase/auth";
-import { getFirestore, enableIndexedDbPersistence, collection, doc, setDoc, addDoc, onSnapshot, query, where, writeBatch, deleteDoc, getDocs, getDoc } from "firebase/firestore";
+import { initializeApp } from 'firebase/app';
+import { 
+    getAuth, 
+    GoogleAuthProvider, 
+    onAuthStateChanged,
+    type User,
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword,
+    signInWithPopup,
+    signOut,
+} from 'firebase/auth';
+import { 
+    getFirestore, 
+    enableIndexedDbPersistence,
+    collection,
+    query,
+    where,
+    onSnapshot,
+    doc,
+    setDoc,
+    getDoc,
+    getDocs,
+    writeBatch,
+    updateDoc,
+    deleteDoc,
+} from 'firebase/firestore';
+
 
 // --- FIREBASE SETUP ---
 // ************************************************************************************
@@ -46,7 +70,7 @@ const FirebaseConfigNeeded = () => (
 // It will only be rendered if Firebase is configured correctly.
 function RentalApp() {
     // Initialize Firebase
-    const app = firebase.initializeApp(firebaseConfig);
+    const app = initializeApp(firebaseConfig);
     const auth = getAuth(app);
     const db = getFirestore(app);
     const googleProvider = new GoogleAuthProvider();
@@ -77,6 +101,8 @@ function RentalApp() {
         const signUp = async (email: string, password: string) => {
             const userCredential = await createUserWithEmailAndPassword(auth, email, password);
             const newUser = userCredential.user;
+            if (!newUser) throw new Error("User creation failed.");
+
             try {
                 // Atomic operation: Create user settings immediately.
                 const settingsDocRef = doc(db, "settings", newUser.uid);
@@ -84,7 +110,7 @@ function RentalApp() {
                 return userCredential;
             } catch (dbError) {
                 // If firestore fails, rollback auth user creation
-                await deleteUser(newUser);
+                await newUser.delete();
                 // re-throw the database error to be caught by the UI
                 throw dbError;
             }
@@ -93,6 +119,8 @@ function RentalApp() {
         const signInWithGoogle = async () => {
             const result = await signInWithPopup(auth, googleProvider);
             const user = result.user;
+            if (!user) throw new Error("Google Sign in failed.");
+
             // Check if user settings exist, if not create them
             const settingsDocRef = doc(db, "settings", user.uid);
             const settingsSnap = await getDoc(settingsDocRef);
@@ -100,7 +128,7 @@ function RentalApp() {
                 try {
                     await setDoc(settingsDocRef, { ...INITIAL_SETTINGS, userId: user.uid });
                 } catch(dbError) {
-                     await deleteUser(user);
+                     await user.delete();
                      throw dbError;
                 }
             }
@@ -352,8 +380,9 @@ function RentalApp() {
             let status = InvoiceStatus.PARTIAL;
             if (balance <= 0) status = InvoiceStatus.PAID;
             if (paidAmount === 0) status = InvoiceStatus.PENDING;
-
-            await setDoc(doc(db, "invoices", invoiceId), { payments: newPayments, balance, status }, { merge: true });
+            
+            const invoiceDocRef = doc(db, "invoices", invoiceId);
+            await updateDoc(invoiceDocRef, { payments: newPayments, balance, status });
         }, [user, invoices]);
 
         const addDepositPayment = useCallback(async (contractId: string, payment: Omit<Payment, 'id'>) => {
@@ -367,12 +396,14 @@ function RentalApp() {
             let status = InvoiceStatus.PARTIAL;
             if (balance <= 0) status = InvoiceStatus.PAID;
             
-            await setDoc(doc(db, "contracts", contractId), { depositPayments: newPayments, depositBalance: balance, depositStatus: status }, { merge: true });
+            const contractDocRef = doc(db, "contracts", contractId);
+            await updateDoc(contractDocRef, { depositPayments: newPayments, depositBalance: balance, depositStatus: status });
         }, [user, contracts]);
 
         const updateSettings = useCallback(async (newSettings: GlobalSettings) => {
             if (!user) return;
-            await setDoc(doc(db, "settings", user.uid), {...newSettings, userId: user.uid});
+            const settingsDocRef = doc(db, "settings", user.uid);
+            await setDoc(settingsDocRef, {...newSettings, userId: user.uid});
         }, [user]);
 
         const addBooking = useCallback(async (newBookingData: Omit<Booking, 'id' | 'status' | 'balance' | 'payments' | 'userId'>) => {
@@ -403,7 +434,8 @@ function RentalApp() {
                 status = BookingStatus.PENDING;
             }
             
-            await setDoc(doc(db, "bookings", bookingId), { payments: newPayments, balance, status }, { merge: true });
+            const bookingDocRef = doc(db, "bookings", bookingId);
+            await updateDoc(bookingDocRef, { payments: newPayments, balance, status });
         }, [user, bookings]);
 
         const deleteContract = useCallback(async (contractId: string) => {
@@ -429,7 +461,7 @@ function RentalApp() {
 
         const setReminderSent = useCallback(async (invoiceId: string) => {
             if (!user) return;
-            await setDoc(doc(db, "invoices", invoiceId), { reminderSent: true }, { merge: true });
+            await updateDoc(doc(db, "invoices", invoiceId), { reminderSent: true });
         }, [user]);
 
         return { units, contracts, invoices, bookings, settings, isLoading, dbError, addContract, updateContract, addPayment, addDepositPayment, updateSettings, addBooking, addBookingPayment, deleteContract, deleteBooking, setReminderSent };
@@ -531,16 +563,23 @@ function RentalApp() {
                         {`rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Legacy v8 rules - adjust if using v9 modular SDK and security rules
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+    // More secure v8 rules:
+    /*
     function isOwner(userId) {
       return request.auth != null && request.auth.uid == userId;
     }
     match /settings/{userId} {
-      allow read, update, create: if isOwner(userId);
+       allow read, update, create: if isOwner(userId);
     }
     match /{collection}/{docId} {
       allow create: if isOwner(request.resource.data.userId);
-      allow read, update, delete: if isOwner(get(/databases/$(database)/documents/$(collection)/$(docId)).data.userId);
+      allow read, update, delete: if isOwner(resource.data.userId);
     }
+    */
   }
 }`}
                     </pre>
@@ -1499,7 +1538,7 @@ service cloud.firestore {
                     setError('Método de inicio de sesión no habilitado en Firebase.');
                 } else if (err.code === 'auth/email-already-in-use') {
                     setError('Este email ya está registrado.');
-                } else if (err.code === 'auth/invalid-credential') {
+                } else if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
                     setError('Email o contraseña incorrectos.');
                 } else if (err.code === 'auth/weak-password') {
                     setError('La contraseña debe tener al menos 6 caracteres.');
