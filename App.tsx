@@ -13,7 +13,7 @@ import { getFirestore, enableIndexedDbPersistence, collection, doc, setDoc, addD
 // *  Ve a la consola de Firebase > Configuración del Proyecto > General                *
 // *  y copia el objeto de configuración de tu aplicación web aquí.                    *
 // ************************************************************************************
-const firebaseConfig ={
+const firebaseConfig = {
   apiKey: "AIzaSyAX7R4-eHUnjGA8bXAwJJ9U3TgA5ImODk0",
   authDomain: "gestion-alquileres-85cb5.firebaseapp.com",
   projectId: "gestion-alquileres-85cb5",
@@ -74,7 +74,7 @@ function RentalApp() {
             return () => unsubscribe();
         }, []);
 
-        const signUp = async (email, password) => {
+        const signUp = async (email: string, password: string) => {
             const userCredential = await createUserWithEmailAndPassword(auth, email, password);
             const newUser = userCredential.user;
             try {
@@ -107,7 +107,7 @@ function RentalApp() {
             return result;
         };
 
-        const signIn = (email, password) => signInWithEmailAndPassword(auth, email, password);
+        const signIn = (email: string, password: string) => signInWithEmailAndPassword(auth, email, password);
         const logOut = () => signOut(auth);
 
         return { user, isLoading, signUp, signIn, signInWithGoogle, logOut };
@@ -182,7 +182,7 @@ function RentalApp() {
 
         }, [user]);
         
-        const addContract = useCallback(async (newContractData: Omit<Contract, 'id' | 'depositAmount' | 'depositBalance' | 'depositStatus' | 'depositPayments'>) => {
+        const addContract = useCallback(async (newContractData: Omit<Contract, 'id' | 'depositAmount' | 'depositBalance' | 'depositStatus' | 'depositPayments' | 'userId'>) => {
             if (!user) return;
             const id = `contract-${Date.now()}`;
             const depositAmount = newContractData.monthlyRent;
@@ -261,7 +261,7 @@ function RentalApp() {
         
             batch.set(contractDocRef, finalUpdatedContract);
             
-            const q = query(collection(db, "invoices"), where("contractId", "==", updatedContract.id));
+            const q = query(collection(db, "invoices"), where("contractId", "==", updatedContract.id), where("userId", "==", user.uid));
             const invoicesSnapshot = await getDocs(q);
             const invoicesForThisContract = invoicesSnapshot.docs.map(d => ({id: d.id, ...d.data()})) as Invoice[];
             
@@ -368,7 +368,7 @@ function RentalApp() {
             await setDoc(doc(db, "settings", user.uid), {...newSettings, userId: user.uid});
         }, [user]);
 
-        const addBooking = useCallback(async (newBookingData: Omit<Booking, 'id' | 'status' | 'balance' | 'payments'>) => {
+        const addBooking = useCallback(async (newBookingData: Omit<Booking, 'id' | 'status' | 'balance' | 'payments' | 'userId'>) => {
             if (!user) return;
             const id = `booking-${Date.now()}`;
             const fullBooking: Omit<Booking, 'id'> = {
