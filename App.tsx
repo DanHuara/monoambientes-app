@@ -1,8 +1,9 @@
 
-import React, { useState, useEffect, createContext, useContext, useCallback, useMemo } from 'react';
+
+import React, { useState, useEffect, createContext, useContext, useCallback, useMemo, useRef } from 'react';
 import { Unit, Contract, Invoice, Booking, GlobalSettings, Payment, UnitType, InvoiceStatus, BookingStatus, PaymentMethod } from './types';
 import { INITIAL_UNITS, INITIAL_SETTINGS, UNIT_TYPE_LABELS } from './constants';
-import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Fingerprint } from 'lucide-react';
+import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Fingerprint, FileUp } from 'lucide-react';
 
 // --- AUTH HELPERS ---
 async function hashPassword(password: string): Promise<string> {
@@ -1419,6 +1420,7 @@ const SettingsView: React.FC<{ setView: (view: View) => void }> = ({ setView }) 
     const [currentSettings, setCurrentSettings] = useState(settings);
     const [showSuccess, setShowSuccess] = useState(false);
     const [isRegistering, setIsRegistering] = useState(false);
+    const restoreInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         setCurrentSettings(settings);
@@ -1443,6 +1445,88 @@ const SettingsView: React.FC<{ setView: (view: View) => void }> = ({ setView }) 
         await registerBiometrics();
         setIsRegistering(false);
     }
+    
+    const handleBackup = () => {
+        const backupData: { [key: string]: string | null } = {};
+        const keysToBackup = ['units', 'contracts', 'invoices', 'bookings', 'settings', 'passwordHash', 'biometricCredentialId', 'userId'];
+        
+        keysToBackup.forEach(key => {
+            backupData[key] = localStorage.getItem(key);
+        });
+
+        const unitsData = JSON.parse(backupData.units || '[]');
+        const contractsData = JSON.parse(backupData.contracts || '[]');
+        const invoicesData = JSON.parse(backupData.invoices || '[]');
+        const bookingsData = JSON.parse(backupData.bookings || '[]');
+        
+        const summaryMessage = `Copia de seguridad creada con éxito.\n\nResumen de datos guardados:\n- Unidades: ${unitsData.length}\n- Contratos: ${contractsData.length}\n- Facturas: ${invoicesData.length}\n- Reservas: ${bookingsData.length}`;
+
+
+        const jsonString = JSON.stringify(backupData, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        const date = new Date().toISOString().slice(0, 10);
+        a.href = url;
+        a.download = `monoambientes-backup-${date}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        alert(summaryMessage);
+    };
+
+    const handleRestoreClick = () => {
+        restoreInputRef.current?.click();
+    };
+
+    const handleRestore = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        if (!window.confirm("¿Estás seguro de que querés restaurar los datos desde este archivo? Todos los datos actuales se reemplazarán. Esta acción es irreversible.")) {
+            event.target.value = ''; // Reset file input
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const text = e.target?.result;
+                if (typeof text !== 'string') throw new Error("File could not be read");
+                
+                const data = JSON.parse(text);
+
+                const unitsCount = (data.units ? JSON.parse(data.units) : []).length;
+                const contractsCount = (data.contracts ? JSON.parse(data.contracts) : []).length;
+                const invoicesCount = (data.invoices ? JSON.parse(data.invoices) : []).length;
+                const bookingsCount = (data.bookings ? JSON.parse(data.bookings) : []).length;
+                
+                const summaryMessage = `Restauración completada con éxito.\n\nResumen de datos cargados:\n- Unidades: ${unitsCount}\n- Contratos: ${contractsCount}\n- Facturas: ${invoicesCount}\n- Reservas: ${bookingsCount}\n\nLa aplicación se reiniciará ahora.`;
+
+                // Clear existing data first
+                localStorage.clear();
+
+                Object.keys(data).forEach(key => {
+                    if (data[key] !== null && typeof data[key] === 'string') {
+                        localStorage.setItem(key, data[key]);
+                    }
+                });
+
+                alert(summaryMessage);
+                window.location.reload();
+
+            } catch (error) {
+                console.error("Failed to restore backup:", error);
+                alert("Error al restaurar la copia de seguridad. El archivo puede estar corrupto o tener un formato incorrecto.");
+            }
+        };
+        reader.readAsText(file);
+        event.target.value = ''; // Reset file input
+    };
+
 
     return (
         <Page title="Configuración" onBack={() => setView('DASHBOARD')}>
@@ -1495,6 +1579,37 @@ const SettingsView: React.FC<{ setView: (view: View) => void }> = ({ setView }) 
                     ) : (
                         <p className="text-gray-400">El inicio de sesión biométrico no es compatible con este dispositivo o navegador.</p>
                     )}
+                </Card>
+                <Card>
+                    <h3 className="text-xl font-bold mb-4">Copia de Seguridad y Restauración</h3>
+                    <div className="space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                            <div>
+                                <p className="font-semibold">Crear Copia de Seguridad</p>
+                                <p className="text-sm text-gray-400">Guarda todos los datos de la aplicación en un archivo que puedes usar para restaurar más tarde o en otro dispositivo.</p>
+                            </div>
+                            <Button onClick={handleBackup} variant="secondary" className="self-start sm:self-center">
+                                <FileDown size={16}/> Crear y Descargar
+                            </Button>
+                        </div>
+                        <div className="border-t border-gray-700 my-4"></div>
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                             <div>
+                                <p className="font-semibold">Restaurar desde Archivo</p>
+                                <p className="text-sm text-gray-400">Reemplaza todos los datos actuales con los de un archivo de copia de seguridad. ¡Esta acción es irreversible!</p>
+                            </div>
+                            <Button onClick={handleRestoreClick} variant="danger" className="self-start sm:self-center">
+                               <FileUp size={16}/> Restaurar Datos
+                            </Button>
+                            <input
+                                type="file"
+                                ref={restoreInputRef}
+                                onChange={handleRestore}
+                                className="hidden"
+                                accept="application/json"
+                            />
+                        </div>
+                    </div>
                 </Card>
             </div>
         </Page>
