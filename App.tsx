@@ -240,17 +240,17 @@ const useAppData = () => {
         let finalUpdatedContract = { ...updatedContract };
     
         if (originalContract.depositStatus !== InvoiceStatus.PAID && originalContract.monthlyRent !== finalUpdatedContract.monthlyRent) {
-            const paidAmount = originalContract.depositAmount - originalContract.depositBalance;
+            const totalPaid = originalContract.depositPayments.filter(p => p.amount > 0).reduce((s, p) => s + p.amount, 0);
+            const totalCredited = originalContract.depositPayments.filter(p => p.amount < 0).reduce((s, p) => s + Math.abs(p.amount), 0);
             const newDepositAmount = finalUpdatedContract.monthlyRent;
-            const newBalance = newDepositAmount - paidAmount;
-            const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (paidAmount > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
+            const newBalance = newDepositAmount - totalPaid - totalCredited;
+            const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (totalPaid > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
             
             finalUpdatedContract = {
                 ...finalUpdatedContract,
                 depositAmount: newDepositAmount,
                 depositBalance: newBalance,
                 depositStatus: newStatus,
-                depositPayments: originalContract.depositPayments,
             };
         }
     
@@ -273,17 +273,18 @@ const useAppData = () => {
 
             invoicesForThisContract.forEach(inv => {
                 if (newContractPeriods.has(inv.period)) {
-                    const [year, month] = inv.period.split('-').map(Number);
-                    const newTotalAmount = finalUpdatedContract.monthlyRent + Object.values(finalUpdatedContract.additionalCharges).reduce((a, b) => a + b, 0);
                     let updatedInvoice = { ...inv };
+                    const [year, month] = inv.period.split('-').map(Number);
                     
                     updatedInvoice.tenantName = finalUpdatedContract.tenantName;
                     updatedInvoice.dueDate = new Date(year, month - 1, contractStartDay).toISOString();
                     
                     if (updatedInvoice.status !== InvoiceStatus.PAID) {
-                        const paidAmount = updatedInvoice.totalAmount - updatedInvoice.balance;
-                        const newBalance = newTotalAmount - paidAmount;
-                        const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (paidAmount > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
+                        const newTotalAmount = finalUpdatedContract.monthlyRent + Object.values(finalUpdatedContract.additionalCharges).reduce((a, b) => a + b, 0);
+                        const totalPaid = inv.payments.filter(p => p.amount > 0).reduce((s, p) => s + p.amount, 0);
+                        const totalCredited = inv.payments.filter(p => p.amount < 0).reduce((s, p) => s + Math.abs(p.amount), 0);
+                        const newBalance = newTotalAmount - totalPaid - totalCredited;
+                        const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (totalPaid > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
                         
                         updatedInvoice = {
                             ...updatedInvoice,
@@ -319,7 +320,7 @@ const useAppData = () => {
                 });
             });
     
-            return [...otherInvoices, ...finalInvoicesForContract];
+            return [...otherInvoices, ...finalInvoicesForContract.sort((a,b) => a.period.localeCompare(b.period))];
         });
     }, [contracts]);
     
@@ -327,11 +328,16 @@ const useAppData = () => {
         setInvoices(prev => prev.map(inv => {
             if (inv.id === invoiceId) {
                 const newPayments = [...inv.payments, { ...payment, id: `payment-${Date.now()}` }];
-                const paidAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
-                const balance = inv.totalAmount - paidAmount;
-                let status = InvoiceStatus.PARTIAL;
-                if (balance <= 0) status = InvoiceStatus.PAID;
-                if (paidAmount === 0 && balance > 0) status = InvoiceStatus.PENDING;
+                const totalPaid = newPayments.filter(p => p.amount > 0).reduce((sum, p) => sum + p.amount, 0);
+                const totalCredited = newPayments.filter(p => p.amount < 0).reduce((sum, p) => sum + Math.abs(p.amount), 0);
+                const balance = inv.totalAmount - totalPaid - totalCredited;
+
+                let status = InvoiceStatus.PENDING;
+                if (balance <= 0) {
+                    status = InvoiceStatus.PAID;
+                } else if (totalPaid > 0) {
+                    status = InvoiceStatus.PARTIAL;
+                }
 
                 return { ...inv, payments: newPayments, balance, status };
             }
@@ -343,10 +349,16 @@ const useAppData = () => {
         setContracts(prev => prev.map(c => {
             if (c.id === contractId) {
                 const newPayments = [...c.depositPayments, { ...payment, id: `payment-deposit-${Date.now()}` }];
-                const paidAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
-                const balance = c.depositAmount - paidAmount;
-                let status = InvoiceStatus.PARTIAL;
-                if (balance <= 0) status = InvoiceStatus.PAID;
+                const totalPaid = newPayments.filter(p => p.amount > 0).reduce((sum, p) => sum + p.amount, 0);
+                const totalCredited = newPayments.filter(p => p.amount < 0).reduce((sum, p) => sum + Math.abs(p.amount), 0);
+                const balance = c.depositAmount - totalPaid - totalCredited;
+                
+                let status = InvoiceStatus.PENDING;
+                 if (balance <= 0) {
+                    status = InvoiceStatus.PAID;
+                } else if (totalPaid > 0) {
+                    status = InvoiceStatus.PARTIAL;
+                }
                 
                 return { ...c, depositPayments: newPayments, depositBalance: balance, depositStatus: status };
             }
@@ -373,13 +385,15 @@ const useAppData = () => {
         setBookings(prev => prev.map(book => {
             if (book.id === bookingId) {
                 const newPayments = [...book.payments, { ...payment, id: `payment-booking-${Date.now()}` }];
-                const paidAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
-                const balance = book.totalAmount - paidAmount;
-                let status = BookingStatus.PARTIAL;
+                const totalPaid = newPayments.filter(p => p.amount > 0).reduce((sum, p) => sum + p.amount, 0);
+                const totalCredited = newPayments.filter(p => p.amount < 0).reduce((sum, p) => sum + Math.abs(p.amount), 0);
+                const balance = book.totalAmount - totalPaid - totalCredited;
+                
+                let status = BookingStatus.PENDING;
                 if (balance <= 0) {
                     status = BookingStatus.PAID;
-                } else if (paidAmount === 0 && balance > 0) {
-                    status = BookingStatus.PENDING;
+                } else if (totalPaid > 0) {
+                    status = BookingStatus.PARTIAL;
                 }
                 return { ...book, payments: newPayments, balance, status };
             }
