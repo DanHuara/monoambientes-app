@@ -16,11 +16,15 @@ export enum InvoiceStatus {
   PAID = 'PAGADO',
 }
 
+export type PaymentMethod = 'efectivo' | 'transferencia';
+
 export interface Payment {
   id: string;
   amount: number;
   date: string; // ISO string
   payerName: string;
+  method: PaymentMethod;
+  observations?: string;
 }
 
 export type AdditionalCharges = {
@@ -48,7 +52,7 @@ export interface Invoice {
 export interface Contract {
   id: string;
   unitId: string;
-  tenantName:string;
+  tenantName: string;
   startDate: string; // ISO string
   endDate: string; // ISO string
   monthlyRent: number;
@@ -56,7 +60,6 @@ export interface Contract {
   // New deposit fields
   depositAmount: number;
   depositInstallments: number;
-
   depositBalance: number;
   depositStatus: InvoiceStatus;
   depositPayments: Payment[];
