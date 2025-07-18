@@ -16,11 +16,15 @@ export enum InvoiceStatus {
   PAID = 'PAGADO',
 }
 
+export type PaymentMethod = 'efectivo' | 'transferencia';
+
 export interface Payment {
   id: string;
   amount: number;
   date: string; // ISO string
   payerName: string;
+  method: PaymentMethod;
+  observations?: string;
 }
 
 export type AdditionalCharges = {
@@ -79,9 +83,6 @@ export interface Booking {
   status: BookingStatus;
   balance: number;
   payments: Payment[];
-  observations?: string;
-  estimatedArrivalTime?: string; // HH:MM
-  notificationSent?: boolean;
 }
 
 export interface GlobalSettings {
