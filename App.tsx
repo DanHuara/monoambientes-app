@@ -1,8 +1,7 @@
-
-import React, { useState, useEffect, createContext, useContext, useCallback, useMemo, useRef } from 'react';
-import { Unit, Contract, Invoice, Booking, GlobalSettings, Payment, UnitType, InvoiceStatus, BookingStatus, PaymentMethod } from './types';
+import React, { useState, useEffect, createContext, useContext, useCallback, useMemo } from 'react';
+import { Unit, Contract, Invoice, Booking, GlobalSettings, Payment, UnitType, InvoiceStatus, BookingStatus } from './types';
 import { INITIAL_UNITS, INITIAL_SETTINGS, UNIT_TYPE_LABELS } from './constants';
-import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Fingerprint, FileUp, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Fingerprint, Clock } from 'lucide-react';
 
 // --- AUTH HELPERS ---
 async function hashPassword(password: string): Promise<string> {
@@ -240,17 +239,17 @@ const useAppData = () => {
         let finalUpdatedContract = { ...updatedContract };
     
         if (originalContract.depositStatus !== InvoiceStatus.PAID && originalContract.monthlyRent !== finalUpdatedContract.monthlyRent) {
-            const totalPaid = originalContract.depositPayments.filter(p => p.amount > 0).reduce((s, p) => s + p.amount, 0);
-            const totalCredited = originalContract.depositPayments.filter(p => p.amount < 0).reduce((s, p) => s + Math.abs(p.amount), 0);
+            const paidAmount = originalContract.depositAmount - originalContract.depositBalance;
             const newDepositAmount = finalUpdatedContract.monthlyRent;
-            const newBalance = newDepositAmount - totalPaid - totalCredited;
-            const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (totalPaid > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
+            const newBalance = newDepositAmount - paidAmount;
+            const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (paidAmount > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
             
             finalUpdatedContract = {
                 ...finalUpdatedContract,
                 depositAmount: newDepositAmount,
                 depositBalance: newBalance,
                 depositStatus: newStatus,
+                depositPayments: originalContract.depositPayments,
             };
         }
     
@@ -273,18 +272,17 @@ const useAppData = () => {
 
             invoicesForThisContract.forEach(inv => {
                 if (newContractPeriods.has(inv.period)) {
-                    let updatedInvoice = { ...inv };
                     const [year, month] = inv.period.split('-').map(Number);
+                    const newTotalAmount = finalUpdatedContract.monthlyRent + Object.values(finalUpdatedContract.additionalCharges).reduce((a, b) => a + b, 0);
+                    let updatedInvoice = { ...inv };
                     
                     updatedInvoice.tenantName = finalUpdatedContract.tenantName;
                     updatedInvoice.dueDate = new Date(year, month - 1, contractStartDay).toISOString();
                     
                     if (updatedInvoice.status !== InvoiceStatus.PAID) {
-                        const newTotalAmount = finalUpdatedContract.monthlyRent + Object.values(finalUpdatedContract.additionalCharges).reduce((a, b) => a + b, 0);
-                        const totalPaid = inv.payments.filter(p => p.amount > 0).reduce((s, p) => s + p.amount, 0);
-                        const totalCredited = inv.payments.filter(p => p.amount < 0).reduce((s, p) => s + Math.abs(p.amount), 0);
-                        const newBalance = newTotalAmount - totalPaid - totalCredited;
-                        const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (totalPaid > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
+                        const paidAmount = updatedInvoice.totalAmount - updatedInvoice.balance;
+                        const newBalance = newTotalAmount - paidAmount;
+                        const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (paidAmount > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
                         
                         updatedInvoice = {
                             ...updatedInvoice,
@@ -320,7 +318,7 @@ const useAppData = () => {
                 });
             });
     
-            return [...otherInvoices, ...finalInvoicesForContract.sort((a,b) => a.period.localeCompare(b.period))];
+            return [...otherInvoices, ...finalInvoicesForContract];
         });
     }, [contracts]);
     
@@ -328,16 +326,11 @@ const useAppData = () => {
         setInvoices(prev => prev.map(inv => {
             if (inv.id === invoiceId) {
                 const newPayments = [...inv.payments, { ...payment, id: `payment-${Date.now()}` }];
-                const totalPaid = newPayments.filter(p => p.amount > 0).reduce((sum, p) => sum + p.amount, 0);
-                const totalCredited = newPayments.filter(p => p.amount < 0).reduce((sum, p) => sum + Math.abs(p.amount), 0);
-                const balance = inv.totalAmount - totalPaid - totalCredited;
-
-                let status = InvoiceStatus.PENDING;
-                if (balance <= 0) {
-                    status = InvoiceStatus.PAID;
-                } else if (totalPaid > 0) {
-                    status = InvoiceStatus.PARTIAL;
-                }
+                const paidAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
+                const balance = inv.totalAmount - paidAmount;
+                let status = InvoiceStatus.PARTIAL;
+                if (balance <= 0) status = InvoiceStatus.PAID;
+                if (paidAmount === 0) status = InvoiceStatus.PENDING;
 
                 return { ...inv, payments: newPayments, balance, status };
             }
@@ -349,16 +342,10 @@ const useAppData = () => {
         setContracts(prev => prev.map(c => {
             if (c.id === contractId) {
                 const newPayments = [...c.depositPayments, { ...payment, id: `payment-deposit-${Date.now()}` }];
-                const totalPaid = newPayments.filter(p => p.amount > 0).reduce((sum, p) => sum + p.amount, 0);
-                const totalCredited = newPayments.filter(p => p.amount < 0).reduce((sum, p) => sum + Math.abs(p.amount), 0);
-                const balance = c.depositAmount - totalPaid - totalCredited;
-                
-                let status = InvoiceStatus.PENDING;
-                 if (balance <= 0) {
-                    status = InvoiceStatus.PAID;
-                } else if (totalPaid > 0) {
-                    status = InvoiceStatus.PARTIAL;
-                }
+                const paidAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
+                const balance = c.depositAmount - paidAmount;
+                let status = InvoiceStatus.PARTIAL;
+                if (balance <= 0) status = InvoiceStatus.PAID;
                 
                 return { ...c, depositPayments: newPayments, depositBalance: balance, depositStatus: status };
             }
@@ -370,7 +357,7 @@ const useAppData = () => {
         setSettings(newSettings);
     }, []);
 
-    const addBooking = useCallback((newBooking: Omit<Booking, 'id' | 'status' | 'balance' | 'payments'>) => {
+    const addBooking = useCallback((newBooking: Omit<Booking, 'id' | 'status' | 'balance' | 'payments' | 'notificationSent'>) => {
         const id = `booking-${Date.now()}`;
         setBookings(prev => [...prev, {
             ...newBooking, 
@@ -378,22 +365,21 @@ const useAppData = () => {
             payments: [],
             balance: newBooking.totalAmount,
             status: BookingStatus.PENDING,
+            notificationSent: false,
         }]);
     }, []);
     
     const addBookingPayment = useCallback((bookingId: string, payment: Omit<Payment, 'id'>) => {
         setBookings(prev => prev.map(book => {
             if (book.id === bookingId) {
-                const newPayments = [...book.payments, { ...payment, id: `payment-booking-${Date.now()}` }];
-                const totalPaid = newPayments.filter(p => p.amount > 0).reduce((sum, p) => sum + p.amount, 0);
-                const totalCredited = newPayments.filter(p => p.amount < 0).reduce((sum, p) => sum + Math.abs(p.amount), 0);
-                const balance = book.totalAmount - totalPaid - totalCredited;
-                
-                let status = BookingStatus.PENDING;
+                const newPayments = [...book.payments, { ...payment, id: `payment-${Date.now()}` }];
+                const paidAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
+                const balance = book.totalAmount - paidAmount;
+                let status = BookingStatus.PARTIAL;
                 if (balance <= 0) {
                     status = BookingStatus.PAID;
-                } else if (totalPaid > 0) {
-                    status = BookingStatus.PARTIAL;
+                } else if (paidAmount === 0) {
+                    status = BookingStatus.PENDING;
                 }
                 return { ...book, payments: newPayments, balance, status };
             }
@@ -414,7 +400,13 @@ const useAppData = () => {
         setInvoices(prev => prev.map(inv => inv.id === invoiceId ? { ...inv, reminderSent: true } : inv));
     }, []);
 
-    return { units, contracts, invoices, bookings, settings, addContract, updateContract, addPayment, addDepositPayment, updateSettings, addBooking, addBookingPayment, deleteContract, deleteBooking, setReminderSent };
+    const markBookingNotificationSent = useCallback((bookingId: string) => {
+        setBookings(prev => prev.map(b => 
+            b.id === bookingId ? { ...b, notificationSent: true } : b
+        ));
+    }, []);
+
+    return { units, contracts, invoices, bookings, settings, addContract, updateContract, addPayment, addDepositPayment, updateSettings, addBooking, addBookingPayment, deleteContract, deleteBooking, setReminderSent, markBookingNotificationSent };
 };
 
 const AppContext = createContext<ReturnType<typeof useAppData> | null>(null);
@@ -475,15 +467,6 @@ const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement> & { label: str
     <div>
         <label className="block text-sm font-medium text-gray-300 mb-1">{label}</label>
         <input {...props} className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-    </div>
-);
-
-const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement> & { label: string; children: React.ReactNode }> = ({ label, children, ...props }) => (
-    <div>
-        <label className="block text-sm font-medium text-gray-300 mb-1">{label}</label>
-        <select {...props} className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
-            {children}
-        </select>
     </div>
 );
 
@@ -579,7 +562,7 @@ const MonthlyView: React.FC<{ setView: (view: View) => void }> = ({ setView }) =
             })
         : [];
     
-    const handleAddPayment = (paymentData: Omit<Payment, 'id'>) => {
+    const handleAddPayment = (paymentData: {amount: number; payerName: string; date: string}) => {
         if(selectedInvoice) {
             addPayment(selectedInvoice.id, paymentData);
             setPaymentModalOpen(false);
@@ -587,7 +570,7 @@ const MonthlyView: React.FC<{ setView: (view: View) => void }> = ({ setView }) =
         }
     };
 
-    const handleAddDepositPayment = (paymentData: Omit<Payment, 'id'>) => {
+    const handleAddDepositPayment = (paymentData: {amount: number; payerName: string; date: string}) => {
         if (selectedContract) {
             addDepositPayment(selectedContract.id, paymentData);
             setDepositModalOpen(false);
@@ -645,24 +628,22 @@ const MonthlyView: React.FC<{ setView: (view: View) => void }> = ({ setView }) =
                                             </div>
                                         </div>
                                         {c.depositAmount > 0 && (
-                                            <div className="mt-3 pt-3 border-t border-gray-600">
-                                                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
-                                                    <div>
-                                                        <p className="text-sm font-semibold">Depósito de Garantía</p>
-                                                        <div className="flex items-center gap-2 mt-1">
-                                                            {getStatusChip(c.depositStatus)}
-                                                            <span className="text-sm text-gray-300">Saldo: ${c.depositBalance.toLocaleString()}</span>
-                                                        </div>
+                                            <div className="mt-3 pt-3 border-t border-gray-600 flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                                                <div>
+                                                    <p className="text-sm font-semibold">Depósito de Garantía</p>
+                                                    <div className="flex items-center gap-2 mt-1">
+                                                        {getStatusChip(c.depositStatus)}
+                                                        <span className="text-sm text-gray-300">Saldo: ${c.depositBalance.toLocaleString()}</span>
                                                     </div>
-                                                    <Button 
-                                                        variant="secondary" 
-                                                        className="px-2 py-1 text-sm self-start sm:self-center"
-                                                        onClick={() => { setSelectedContract(c); setDepositModalOpen(true); }} 
-                                                        disabled={c.depositStatus === InvoiceStatus.PAID}
-                                                    >
-                                                        Pagar Depósito
-                                                    </Button>
                                                 </div>
+                                                <Button 
+                                                    variant="secondary" 
+                                                    className="px-2 py-1 text-sm self-start sm:self-center"
+                                                    onClick={() => { setSelectedContract(c); setDepositModalOpen(true); }} 
+                                                    disabled={c.depositStatus === InvoiceStatus.PAID}
+                                                >
+                                                    Pagar Depósito
+                                                </Button>
                                             </div>
                                         )}
                                     </div>
@@ -675,38 +656,18 @@ const MonthlyView: React.FC<{ setView: (view: View) => void }> = ({ setView }) =
                             <h3 className="text-xl font-semibold mb-2">Facturas</h3>
                             <div className="space-y-2">
                             {unitInvoices.length > 0 ? unitInvoices.map(inv => (
-                                <div key={inv.id} className="bg-gray-700/50 p-3 rounded-md">
-                                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                                        <div className="flex-1">
-                                            <div className="flex items-center gap-3">
-                                                <span className="font-bold">{inv.tenantName}</span>
-                                                {getStatusChip(inv.status)}
-                                            </div>
-                                            <p className="text-sm text-gray-300">Período: {inv.period} | Vence: {new Date(inv.dueDate).toLocaleDateString()}</p>
-                                            <p className="text-sm text-gray-400">Total: ${inv.totalAmount.toLocaleString()} | Saldo: ${inv.balance.toLocaleString()}</p>
+                                <div key={inv.id} className="bg-gray-700/50 p-3 rounded-md flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                                    <div className="flex-1">
+                                        <div className="flex items-center gap-3">
+                                            <span className="font-bold">{inv.tenantName}</span>
+                                            {getStatusChip(inv.status)}
                                         </div>
-                                        <Button onClick={() => { setSelectedInvoice(inv); setPaymentModalOpen(true); }} variant="secondary" className="self-start sm:self-center" disabled={inv.status === InvoiceStatus.PAID}>
-                                            <DollarSign size={16}/> Registrar Pago
-                                        </Button>
+                                        <p className="text-sm text-gray-300">Período: {inv.period} | Vence: {new Date(inv.dueDate).toLocaleDateString()}</p>
+                                        <p className="text-sm text-gray-400">Total: ${inv.totalAmount.toLocaleString()} | Saldo: ${inv.balance.toLocaleString()}</p>
                                     </div>
-                                    {inv.payments.length > 0 && (
-                                        <div className="mt-3 pt-3 border-t border-gray-600/50">
-                                            <h4 className="text-xs font-semibold text-gray-400 mb-2">Pagos:</h4>
-                                            <ul className="text-xs space-y-1">
-                                                {inv.payments.map(p => (
-                                                    <li key={p.id} className="flex justify-between items-start text-gray-300">
-                                                        <div className="flex-1 pr-2">
-                                                            <span>{new Date(p.date).toLocaleDateString()} - <span className="capitalize">{p.method}</span></span>
-                                                            {p.observations && <p className="text-gray-400 italic">{p.observations}</p>}
-                                                        </div>
-                                                        <span className={`font-semibold ${p.amount < 0 ? 'text-yellow-400' : ''}`}>
-                                                            {p.amount < 0 ? `-$${Math.abs(p.amount).toLocaleString()} (NC)` : `$${p.amount.toLocaleString()}`}
-                                                        </span>
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        </div>
-                                    )}
+                                    <Button onClick={() => { setSelectedInvoice(inv); setPaymentModalOpen(true); }} variant="secondary" className="self-start sm:self-center" disabled={inv.status === InvoiceStatus.PAID}>
+                                        <DollarSign size={16}/> Registrar Pago
+                                    </Button>
                                 </div>
                             )) : <p className="text-gray-400">No hay facturas para esta unidad.</p>}
                             </div>
@@ -799,26 +760,42 @@ const ContractFormModal: React.FC<{
     };
     
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={isEditMode ? "Editar Contrato" : "Nuevo Contrato"}>
+        <Modal isOpen={isOpen} onClose={onClose} title={isEditMode ? "Editar Contrato" : "Nuevo Contrato Mensual"}>
             <form onSubmit={handleSubmit} className="space-y-4">
-                <Input label="Nombre del Inquilino" value={tenantName} onChange={e => setTenantName(e.target.value)} required />
-                <div className="grid grid-cols-2 gap-4">
+                <Input label="Nombre del Inquilino" type="text" value={tenantName} onChange={e => setTenantName(e.target.value)} required />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <Input label="Fecha de Inicio" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} required />
                     <Input label="Fecha de Fin" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} required />
                 </div>
-                <Input label="Monto del Alquiler Mensual" type="number" value={monthlyRent} onChange={e => setMonthlyRent(parseFloat(e.target.value) || 0)} required />
-                <fieldset className="border border-gray-600 p-4 rounded-md">
-                    <legend className="text-sm font-medium text-gray-300 px-2">Cargos Adicionales</legend>
-                    <div className="space-y-2">
-                        <Input label="Internet" type="number" value={extraCharges.internet} onChange={e => setExtraCharges(c => ({...c, internet: parseFloat(e.target.value) || 0}))} />
-                        <Input label="Muebles" type="number" value={extraCharges.furniture} onChange={e => setExtraCharges(c => ({...c, furniture: parseFloat(e.target.value) || 0}))} />
-                        <Input label="Otros" type="number" value={extraCharges.other} onChange={e => setExtraCharges(c => ({...c, other: parseFloat(e.target.value) || 0}))} />
-                    </div>
-                </fieldset>
-                <Input label="Cuotas del Depósito" type="number" min="1" step="1" value={depositInstallments} onChange={e => setDepositInstallments(parseInt(e.target.value) || 1)} />
+                
+                <h4 className="text-lg font-semibold border-t border-gray-700 pt-4 mt-4">Detalles del Alquiler</h4>
+                <Input label="Monto Base Mensual" type="number" value={monthlyRent} onChange={e => setMonthlyRent(Number(e.target.value))} required />
+                
+                <h4 className="text-lg font-semibold border-t border-gray-700 pt-4 mt-4">Depósito de Garantía</h4>
+                <p className="text-sm text-gray-300 bg-gray-700/50 p-2 rounded-md">Monto del depósito: <span className="font-bold">${monthlyRent.toLocaleString()}</span> (igual al monto base mensual)</p>
+                <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Cuotas del Depósito</label>
+                    <select value={depositInstallments} onChange={e => setDepositInstallments(Number(e.target.value))} className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+                        <option value={1}>1 cuota</option>
+                        <option value={2}>2 cuotas</option>
+                        <option value={3}>3 cuotas</option>
+                    </select>
+                </div>
 
+                <h4 className="text-lg font-semibold border-t border-gray-700 pt-4 mt-4">Gastos Adicionales Recurrentes</h4>
+                <div className="space-y-2">
+                    {Object.entries(extraCharges).map(([key, value]) => (
+                        <Input 
+                            key={key} 
+                            label={key.charAt(0).toUpperCase() + key.slice(1)} 
+                            type="number" 
+                            value={value} 
+                            onChange={e => setExtraCharges(prev => ({...prev, [key]: Number(e.target.value)}))} 
+                        />
+                    ))}
+                </div>
                 <div className="flex justify-end gap-2 pt-4">
-                    <Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button>
+                    <Button onClick={onClose} variant="secondary" type="button">Cancelar</Button>
                     <Button type="submit">{isEditMode ? "Guardar Cambios" : "Crear Contrato"}</Button>
                 </div>
             </form>
@@ -826,266 +803,340 @@ const ContractFormModal: React.FC<{
     );
 };
 
-const PaymentModal: React.FC<{ isOpen: boolean; onClose: () => void; invoice: Invoice | null; onAddPayment: (payment: Omit<Payment, 'id'>) => void; }> = ({ isOpen, onClose, invoice, onAddPayment }) => {
+const PaymentModal: React.FC<{isOpen: boolean; onClose: () => void; invoice: Invoice | null; onAddPayment: (data: {amount: number; payerName: string; date: string}) => void;}> = ({isOpen, onClose, invoice, onAddPayment}) => {
     const [amount, setAmount] = useState(0);
-    const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     const [payerName, setPayerName] = useState('');
-    const [method, setMethod] = useState<PaymentMethod>('transferencia');
-    const [observations, setObservations] = useState('');
+    const [date, setDate] = useState('');
 
     useEffect(() => {
-        if (invoice) {
-            setAmount(invoice.balance > 0 ? invoice.balance : 0);
+        if(invoice){
+            setAmount(invoice.balance);
             setPayerName(invoice.tenantName);
             setDate(new Date().toISOString().split('T')[0]);
-            setMethod('transferencia');
-            setObservations('');
         }
     }, [invoice]);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        onAddPayment({ amount, date, payerName, method, observations });
+        if(amount > 0 && payerName && date) {
+            onAddPayment({amount, payerName, date: new Date(date + 'T12:00:00').toISOString()});
+            setAmount(0);
+            setPayerName('');
+            setDate('');
+        }
     };
-
-    if (!invoice) return null;
+    
+    if(!invoice) return null;
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={`Registrar Pago para ${invoice.period}`}>
+        <Modal isOpen={isOpen} onClose={onClose} title={`Registrar Pago para ${invoice.tenantName}`}>
             <form onSubmit={handleSubmit} className="space-y-4">
-                <Input label="Monto" type="number" step="0.01" value={amount} onChange={e => setAmount(parseFloat(e.target.value))} required />
-                <Input label="Fecha de Pago" type="date" value={date} onChange={e => setDate(e.target.value)} required />
-                <Input label="Nombre del Pagador" value={payerName} onChange={e => setPayerName(e.target.value)} required />
-                <Select label="Método de Pago" value={method} onChange={e => setMethod(e.target.value as PaymentMethod)}>
-                    <option value="transferencia">Transferencia</option>
-                    <option value="efectivo">Efectivo</option>
-                </Select>
-                <Input label="Observaciones (Opcional)" value={observations} onChange={e => setObservations(e.target.value)} />
-
+                <div className="bg-gray-700 p-3 rounded-md">
+                    <p>Período: <span className="font-semibold">{invoice.period}</span></p>
+                    <p>Monto Total: <span className="font-semibold">${invoice.totalAmount.toLocaleString()}</span></p>
+                    <p>Saldo Pendiente: <span className="font-semibold">${invoice.balance.toLocaleString()}</span></p>
+                </div>
+                <Input label="Nombre del Pagador" type="text" value={payerName} onChange={e => setPayerName(e.target.value)} required />
+                <Input label="Monto a Pagar" type="number" value={amount} onChange={e => setAmount(Number(e.target.value))} required min="0.01" step="0.01"/>
+                <Input label="Fecha del Pago" type="date" value={date} onChange={e => setDate(e.target.value)} required />
                 <div className="flex justify-end gap-2 pt-4">
-                    <Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button>
-                    <Button type="submit">Agregar Pago</Button>
+                    <Button onClick={onClose} variant="secondary" type="button">Cancelar</Button>
+                    <Button type="submit">Registrar Pago</Button>
                 </div>
             </form>
         </Modal>
     );
 };
 
-const DepositPaymentModal: React.FC<{ isOpen: boolean; onClose: () => void; contract: Contract | null; onAddDepositPayment: (payment: Omit<Payment, 'id'>) => void; }> = ({ isOpen, onClose, contract, onAddDepositPayment }) => {
+const DepositPaymentModal: React.FC<{isOpen: boolean; onClose: () => void; contract: Contract | null; onAddDepositPayment: (data: {amount: number; payerName: string; date: string}) => void;}> = ({isOpen, onClose, contract, onAddDepositPayment}) => {
     const [amount, setAmount] = useState(0);
-    const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     const [payerName, setPayerName] = useState('');
-    const [method, setMethod] = useState<PaymentMethod>('transferencia');
-    const [observations, setObservations] = useState('');
+    const [date, setDate] = useState('');
 
     useEffect(() => {
-        if (contract) {
-            setAmount(contract.depositBalance > 0 ? contract.depositBalance : 0);
+        if(contract){
+            setAmount(contract.depositBalance);
             setPayerName(contract.tenantName);
             setDate(new Date().toISOString().split('T')[0]);
-            setMethod('transferencia');
-            setObservations('');
         }
     }, [contract]);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        if(contract) {
-            onAddDepositPayment({ amount, date, payerName, method, observations });
+        if(amount > 0 && payerName && date && contract) {
+            onAddDepositPayment({amount, payerName, date: new Date(date + 'T12:00:00').toISOString()});
         }
+        onClose();
     };
     
-    if (!contract) return null;
+    if(!contract) return null;
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={`Pago de Depósito para ${contract.tenantName}`}>
+        <Modal isOpen={isOpen} onClose={onClose} title={`Pagar Depósito para ${contract.tenantName}`}>
             <form onSubmit={handleSubmit} className="space-y-4">
-                <Input label="Monto" type="number" step="0.01" value={amount} onChange={e => setAmount(parseFloat(e.target.value))} required />
-                <Input label="Fecha de Pago" type="date" value={date} onChange={e => setDate(e.target.value)} required />
-                <Input label="Nombre del Pagador" value={payerName} onChange={e => setPayerName(e.target.value)} required />
-                <Select label="Método de Pago" value={method} onChange={e => setMethod(e.target.value as PaymentMethod)}>
-                    <option value="transferencia">Transferencia</option>
-                    <option value="efectivo">Efectivo</option>
-                </Select>
-                <Input label="Observaciones (Opcional)" value={observations} onChange={e => setObservations(e.target.value)} />
+                <div className="bg-gray-700 p-3 rounded-md">
+                    <p>Contrato: <span className="font-semibold">{new Date(contract.startDate + 'T12:00:00').toLocaleDateString()} - {new Date(contract.endDate + 'T12:00:00').toLocaleDateString()}</span></p>
+                    <p>Monto Total Depósito: <span className="font-semibold">${contract.depositAmount.toLocaleString()}</span></p>
+                    <p>Saldo Pendiente: <span className="font-semibold">${contract.depositBalance.toLocaleString()}</span></p>
+                </div>
+                <Input label="Nombre del Pagador" type="text" value={payerName} onChange={e => setPayerName(e.target.value)} required />
+                <Input label="Monto a Pagar" type="number" value={amount} onChange={e => setAmount(Number(e.target.value))} required min="0.01" step="0.01"/>
+                <Input label="Fecha del Pago" type="date" value={date} onChange={e => setDate(e.target.value)} required />
                 <div className="flex justify-end gap-2 pt-4">
-                    <Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button>
-                    <Button type="submit">Agregar Pago</Button>
+                    <Button onClick={onClose} variant="secondary" type="button">Cancelar</Button>
+                    <Button type="submit">Registrar Pago</Button>
                 </div>
             </form>
         </Modal>
     );
 };
 
-const CalendarComponent: React.FC<{ bookings: Booking[] }> = ({ bookings }) => {
-    const [currentDate, setCurrentDate] = useState(new Date());
+const BookingPaymentModal: React.FC<{isOpen: boolean; onClose: () => void; booking: Booking | null; onAddBookingPayment: (data: {amount: number; payerName: string; date: string}) => void;}> = ({isOpen, onClose, booking, onAddBookingPayment}) => {
+    const [amount, setAmount] = useState(0);
+    const [payerName, setPayerName] = useState('');
+    const [date, setDate] = useState('');
 
-    const bookedRanges = useMemo(() => 
-        bookings.map(b => ({
-            start: new Date(b.startDate + 'T00:00:00'),
-            end: new Date(b.endDate + 'T00:00:00'),
-        })), [bookings]);
-
-    const isBooked = (day: Date) => {
-        return bookedRanges.some(range => day >= range.start && day <= range.end);
-    };
-
-    const handlePrevMonth = () => {
-        setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
-    };
-
-    const handleNextMonth = () => {
-        setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
-    };
-
-    const renderCalendar = () => {
-        const month = currentDate.getMonth();
-        const year = currentDate.getFullYear();
-        const firstDayOfMonth = new Date(year, month, 1).getDay();
-        const daysInMonth = new Date(year, month + 1, 0).getDate();
-        
-        const days = [];
-        for (let i = 0; i < firstDayOfMonth; i++) {
-            days.push(<div key={`empty-${i}`} className="p-2 text-center"></div>);
+    useEffect(() => {
+        if(booking){
+            setAmount(booking.balance);
+            setPayerName(booking.guestName);
+            setDate(new Date().toISOString().split('T')[0]);
         }
+    }, [booking]);
 
-        for (let day = 1; day <= daysInMonth; day++) {
-            const date = new Date(year, month, day);
-            const today = new Date();
-            const isToday = date.toDateString() === today.toDateString();
-            const booked = isBooked(date);
-            
-            let classes = 'p-2 text-center rounded-full w-10 h-10 flex items-center justify-center';
-            if (isToday) classes += ' bg-indigo-500 text-white';
-            if (booked) classes += ' bg-blue-600 text-white font-bold';
-            
-            days.push(<div key={day} className={classes}>{day}</div>);
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if(amount > 0 && payerName && date) {
+            onAddBookingPayment({amount, payerName, date: new Date(date + 'T12:00:00').toISOString()});
+            onClose();
         }
-        return days;
     };
-    
+
+    if(!booking) return null;
+
     return (
-        <Card className="mb-6">
-            <div className="flex justify-between items-center mb-4">
-                <button onClick={handlePrevMonth} className="p-2 rounded-full hover:bg-gray-700"><ChevronLeft /></button>
-                <h3 className="text-lg font-bold">{currentDate.toLocaleString('es-ES', { month: 'long', year: 'numeric' }).toUpperCase()}</h3>
-                <button onClick={handleNextMonth} className="p-2 rounded-full hover:bg-gray-700"><ChevronRight /></button>
-            </div>
-            <div className="grid grid-cols-7 gap-1 text-sm text-center text-gray-400 mb-2">
-                {['D', 'L', 'M', 'M', 'J', 'V', 'S'].map(day => <div key={day}>{day}</div>)}
-            </div>
-            <div className="grid grid-cols-7 gap-y-2 items-center justify-items-center">
-                {renderCalendar()}
-            </div>
-        </Card>
+        <Modal isOpen={isOpen} onClose={onClose} title={`Registrar Pago para ${booking.guestName}`}>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="bg-gray-700 p-3 rounded-md">
+                    <p>Reserva: <span className="font-semibold">{new Date(booking.startDate + 'T12:00:00').toLocaleDateString()} - {new Date(booking.endDate + 'T12:00:00').toLocaleDateString()}</span></p>
+                    <p>Monto Total: <span className="font-semibold">${booking.totalAmount.toLocaleString()}</span></p>
+                    <p>Saldo Pendiente: <span className="font-semibold">${booking.balance.toLocaleString()}</span></p>
+                </div>
+                <Input label="Nombre del Pagador" type="text" value={payerName} onChange={e => setPayerName(e.target.value)} required />
+                <Input label="Monto a Pagar" type="number" value={amount} onChange={e => setAmount(Number(e.target.value))} required min="0.01" step="0.01"/>
+                <Input label="Fecha del Pago" type="date" value={date} onChange={e => setDate(e.target.value)} required />
+                <div className="flex justify-end gap-2 pt-4">
+                    <Button onClick={onClose} variant="secondary" type="button">Cancelar</Button>
+                    <Button type="submit">Registrar Pago</Button>
+                </div>
+            </form>
+        </Modal>
     );
 };
 
 
-const BookingFormModal: React.FC<{
-    isOpen: boolean;
-    onClose: () => void;
-    unitId?: string;
-    addBooking: (booking: Omit<Booking, 'id' | 'status' | 'balance' | 'payments'>) => void;
-}> = ({ isOpen, onClose, unitId, addBooking }) => {
+const DailyView: React.FC<{ setView: (view: View) => void }> = ({ setView }) => {
+    const { units, bookings, addBooking, deleteBooking, addBookingPayment } = useApp();
+    const [isBookingModalOpen, setBookingModalOpen] = useState(false);
+    const [isBookingPaymentModalOpen, setBookingPaymentModalOpen] = useState(false);
+    const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
+
+    const dailyUnits = units.filter(u => u.type === UnitType.APARTMENT_DAILY);
+    
+    const bookingsByUnit = useMemo(() => {
+        return bookings.reduce((acc, booking) => {
+            if (!acc[booking.unitId]) {
+                acc[booking.unitId] = [];
+            }
+            acc[booking.unitId].push(booking);
+            return acc;
+        }, {} as Record<string, Booking[]>);
+    }, [bookings]);
+
+    const handleAddBookingPayment = (paymentData: {amount: number; payerName: string; date: string}) => {
+        if (selectedBooking) {
+            addBookingPayment(selectedBooking.id, paymentData);
+            setBookingPaymentModalOpen(false);
+            setSelectedBooking(null);
+        }
+    };
+
+    const handleClosePaymentModal = () => {
+        setBookingPaymentModalOpen(false);
+        setSelectedBooking(null);
+    }
+
+    return (
+        <Page title="Alquileres Diarios" onBack={() => setView('DASHBOARD')} actions={<Button onClick={() => setBookingModalOpen(true)}><PlusCircle size={16} /> Nueva Reserva</Button>}>
+            <div className="space-y-6">
+                {dailyUnits.map(unit => (
+                    <Card key={unit.id}>
+                        <h3 className="text-xl font-bold mb-3">{unit.name}</h3>
+                        <div className="space-y-2">
+                           {(bookingsByUnit[unit.id] || []).sort((a,b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime()).map(booking => (
+                               <div key={booking.id} className="bg-gray-700/50 p-3 rounded-md flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                   <div className="flex-1">
+                                        <div className="flex items-center gap-3 mb-1">
+                                            <p className="font-bold">{booking.guestName}</p>
+                                            {getBookingStatusChip(booking.status)}
+                                       </div>
+                                       <p className="text-sm text-gray-300">
+                                            {new Date(booking.startDate + 'T12:00:00').toLocaleDateString()} - {new Date(booking.endDate + 'T12:00:00').toLocaleDateString()}
+                                            <span className="mx-2">|</span>
+                                            {booking.guestCount} Huésped(es)
+                                       </p>
+                                        {booking.estimatedArrivalTime && (
+                                            <div className="flex items-center gap-2 text-sm text-indigo-300">
+                                                <Clock size={14} /> <span>Llegada estimada: {booking.estimatedArrivalTime}hs</span>
+                                            </div>
+                                        )}
+                                       <p className="text-sm text-gray-400 mt-2">Total: ${booking.totalAmount.toLocaleString()} | Saldo: ${booking.balance.toLocaleString()}</p>
+                                       {booking.observations && (
+                                            <p className="text-xs text-gray-400 mt-2 border-t border-gray-600/50 pt-2 italic">
+                                                <strong>Obs:</strong> {booking.observations}
+                                            </p>
+                                        )}
+                                   </div>
+                                   <div className="flex items-center gap-2 self-start sm:self-center">
+                                       <Button onClick={() => { setSelectedBooking(booking); setBookingPaymentModalOpen(true); }} variant="secondary" disabled={booking.status === BookingStatus.PAID}>
+                                           <DollarSign size={16}/> Registrar Pago
+                                       </Button>
+                                       <button onClick={() => window.confirm('¿Seguro que querés borrar esta reserva?') && deleteBooking(booking.id)} className="p-2 text-gray-400 hover:text-red-400 transition-colors"><Trash2 size={18}/></button>
+                                   </div>
+                               </div>
+                           ))}
+                           {!(bookingsByUnit[unit.id] || []).length && <p className="text-gray-400">No hay reservas para esta unidad.</p>}
+                        </div>
+                    </Card>
+                ))}
+            </div>
+            <BookingFormModal isOpen={isBookingModalOpen} onClose={() => setBookingModalOpen(false)} units={dailyUnits} addBooking={addBooking} />
+            <BookingPaymentModal 
+                isOpen={isBookingPaymentModalOpen}
+                onClose={handleClosePaymentModal}
+                booking={selectedBooking}
+                onAddBookingPayment={handleAddBookingPayment}
+            />
+        </Page>
+    );
+};
+
+const BookingFormModal: React.FC<{ isOpen: boolean; onClose: () => void; units: Unit[]; addBooking: (booking: Omit<Booking, 'id' | 'status' | 'balance' | 'payments' | 'notificationSent'>) => void; }> = ({ isOpen, onClose, units, addBooking }) => {
     const { settings } = useApp();
+    const [unitId, setUnitId] = useState('');
     const [guestName, setGuestName] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
     const [guestCount, setGuestCount] = useState(1);
     const [totalAmount, setTotalAmount] = useState(0);
     const [deposit, setDeposit] = useState(0);
+    const [estimatedArrivalTime, setEstimatedArrivalTime] = useState('');
+    const [observations, setObservations] = useState('');
 
-    useEffect(() => {
-        if (!startDate || !endDate || guestCount < 1) {
-            setTotalAmount(0);
-            return;
-        }
-
-        const start = new Date(startDate + 'T00:00:00');
-        const end = new Date(endDate + 'T00:00:00');
-        if (start > end) {
-            setTotalAmount(0);
-            return;
-        }
-
+    const suggestedAmount = useMemo(() => {
+        if (!startDate || !endDate || guestCount < 1) return 0;
+        const start = new Date(startDate);
+        const end = new Date(endDate);
         const nights = Math.ceil((end.getTime() - start.getTime()) / (1000 * 3600 * 24));
-        if (nights <= 0) {
-            setTotalAmount(0);
-            return;
-        }
-
-        let rateKey: keyof typeof settings.dailyRates = 'p1';
-        if (guestCount === 2) rateKey = 'p2';
-        else if (guestCount === 3) rateKey = 'p3';
-        else if (guestCount >= 4) rateKey = 'p4';
-
-        const dailyRate = settings.dailyRates[rateKey];
-        const newTotal = nights * dailyRate;
-        setTotalAmount(newTotal);
-
+        if (nights <= 0) return 0;
+        
+        const rateKey = `p${guestCount}` as keyof typeof settings.dailyRates;
+        const dailyRate = settings.dailyRates[rateKey] || settings.dailyRates.p4;
+        return nights * dailyRate;
     }, [startDate, endDate, guestCount, settings.dailyRates]);
-
-    useEffect(() => {
-        if (totalAmount > 0) {
-            const newDeposit = (totalAmount * settings.bookingDepositPercentage) / 100;
-            setDeposit(newDeposit);
-        } else {
-            setDeposit(0);
-        }
+    
+    const suggestedDeposit = useMemo(() => {
+        return Math.round((totalAmount * settings.bookingDepositPercentage) / 100);
     }, [totalAmount, settings.bookingDepositPercentage]);
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!unitId || !guestName || !startDate || !endDate || guestCount < 1 || totalAmount <= 0) {
-            alert('Por favor, complete todos los campos correctamente.');
-            return;
-        }
-        addBooking({
-            unitId,
-            guestName,
-            startDate,
-            endDate,
-            guestCount,
-            totalAmount,
-            deposit,
-        });
-        onClose();
-    };
-    
-    // Reset form on close
     useEffect(() => {
-        if(!isOpen) {
+        if(suggestedAmount > 0) {
+            setTotalAmount(suggestedAmount);
+        } else {
+            setTotalAmount(0);
+        }
+    }, [suggestedAmount]);
+
+    useEffect(() => {
+        setDeposit(suggestedDeposit);
+    }, [suggestedDeposit]);
+    
+    useEffect(() => {
+        if (isOpen) {
+            setUnitId(units[0]?.id || '');
             setGuestName('');
             setStartDate('');
             setEndDate('');
             setGuestCount(1);
+            setTotalAmount(0);
+            setDeposit(0);
+            setEstimatedArrivalTime('');
+            setObservations('');
         }
-    }, [isOpen]);
+    }, [isOpen, units]);
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        if(!unitId || !guestName || !startDate || !endDate || guestCount < 1 || new Date(startDate) >= new Date(endDate) || totalAmount <= 0) {
+            alert('Completá todos los campos correctamente. La fecha de fin debe ser posterior a la de inicio y el monto total debe ser mayor a 0.');
+            return;
+        }
+        addBooking({
+            unitId, guestName, startDate, endDate, guestCount, totalAmount, deposit,
+            observations: observations || undefined,
+            estimatedArrivalTime: estimatedArrivalTime || undefined,
+        });
+        onClose();
+    };
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title="Nueva Reserva">
+        <Modal isOpen={isOpen} onClose={onClose} title="Nueva Reserva Diaria">
             <form onSubmit={handleSubmit} className="space-y-4">
-                <Input label="Nombre del Huésped" value={guestName} onChange={e => setGuestName(e.target.value)} required />
-                <div className="grid grid-cols-2 gap-4">
-                    <Input label="Fecha de Entrada" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} required />
-                    <Input label="Fecha de Salida" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} required />
+                <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Unidad</label>
+                    <select value={unitId} onChange={e => setUnitId(e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+                        <option value="">Seleccionar unidad...</option>
+                        {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                    </select>
                 </div>
-                <Input label="Cantidad de Huéspedes" type="number" min="1" value={guestCount} onChange={e => setGuestCount(parseInt(e.target.value, 10) || 1)} required />
-                
-                <div className="bg-gray-700 p-3 rounded-md space-y-2">
-                    <div className="flex justify-between">
-                        <span className="text-gray-300">Monto Total:</span>
-                        <span className="font-bold">${totalAmount.toLocaleString()}</span>
+                <Input label="Nombre del Huésped" value={guestName} onChange={e => setGuestName(e.target.value)} required />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Input label="Fecha de Inicio" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} required />
+                    <Input label="Fecha de Fin" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} required />
+                </div>
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1">Cantidad de Huéspedes</label>
+                        <select value={guestCount} onChange={e => setGuestCount(Number(e.target.value))} className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
+                            <option value={1}>1 huésped</option>
+                            <option value={2}>2 huéspedes</option>
+                            <option value={3}>3 huéspedes</option>
+                            <option value={4}>4 huéspedes</option>
+                        </select>
                     </div>
-                     <div className="flex justify-between">
-                        <span className="text-gray-300">Depósito ({settings.bookingDepositPercentage}%):</span>
-                        <span className="font-bold">${deposit.toLocaleString()}</span>
-                    </div>
+                    <Input label="Hora Estimada de Llegada" type="time" value={estimatedArrivalTime} onChange={e => setEstimatedArrivalTime(e.target.value)} />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">Observaciones</label>
+                    <textarea 
+                        value={observations} 
+                        onChange={e => setObservations(e.target.value)}
+                        rows={3}
+                        className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="Ej: Llega en auto, necesita factura, etc."
+                    />
+                </div>
+                <div>
+                    <Input label="Monto Total" type="number" value={totalAmount} onChange={e => setTotalAmount(Number(e.target.value))} required />
+                    {suggestedAmount > 0 && totalAmount !== suggestedAmount && <p className="text-xs text-gray-400 mt-1">Sugerido: ${suggestedAmount.toLocaleString()}</p>}
+                </div>
+                <div>
+                    <Input label="Seña" type="number" value={deposit} onChange={e => setDeposit(Number(e.target.value))} required />
+                    {suggestedDeposit > 0 && deposit !== suggestedDeposit && <p className="text-xs text-gray-400 mt-1">Sugerido ({settings.bookingDepositPercentage}%): ${suggestedDeposit.toLocaleString()}</p>}
                 </div>
 
                 <div className="flex justify-end gap-2 pt-4">
-                    <Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button>
+                    <Button onClick={onClose} variant="secondary" type="button">Cancelar</Button>
                     <Button type="submit">Crear Reserva</Button>
                 </div>
             </form>
@@ -1093,670 +1144,403 @@ const BookingFormModal: React.FC<{
     );
 };
 
-const BookingPaymentModal: React.FC<{
-    isOpen: boolean;
-    onClose: () => void;
-    booking: Booking | null;
-    onAddBookingPayment: (payment: Omit<Payment, 'id'>) => void;
-}> = ({ isOpen, onClose, booking, onAddBookingPayment }) => {
-    const [amount, setAmount] = useState(0);
-    const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-    const [payerName, setPayerName] = useState('');
-    const [method, setMethod] = useState<PaymentMethod>('transferencia');
-    const [observations, setObservations] = useState('');
-
-    useEffect(() => {
-        if (booking) {
-            setAmount(booking.balance > 0 ? booking.balance : 0);
-            setPayerName(booking.guestName);
-            setDate(new Date().toISOString().split('T')[0]);
-            setMethod('transferencia');
-            setObservations('');
-        }
-    }, [booking]);
-
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        onAddBookingPayment({ amount, date, payerName, method, observations });
-    };
-
-    if (!booking) return null;
-
-    return (
-        <Modal isOpen={isOpen} onClose={onClose} title={`Registrar Pago para ${booking.guestName}`}>
-            <form onSubmit={handleSubmit} className="space-y-4">
-                <Input label="Monto" type="number" step="0.01" value={amount} onChange={e => setAmount(parseFloat(e.target.value))} required />
-                <Input label="Fecha de Pago" type="date" value={date} onChange={e => setDate(e.target.value)} required />
-                <Input label="Nombre del Pagador" value={payerName} onChange={e => setPayerName(e.target.value)} required />
-                <Select label="Método de Pago" value={method} onChange={e => setMethod(e.target.value as PaymentMethod)}>
-                    <option value="transferencia">Transferencia</option>
-                    <option value="efectivo">Efectivo</option>
-                </Select>
-                <Input label="Observaciones (Opcional)" value={observations} onChange={e => setObservations(e.target.value)} />
-
-                <div className="flex justify-end gap-2 pt-4">
-                    <Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button>
-                    <Button type="submit">Agregar Pago</Button>
-                </div>
-            </form>
-        </Modal>
-    );
-};
-
-const DailyView: React.FC<{ setView: (view: View) => void }> = ({ setView }) => {
-    const { units, bookings, addBooking, addBookingPayment, deleteBooking } = useApp();
-    const [selectedUnit, setSelectedUnit] = useState<Unit | null>(null);
-    const [isBookingModalOpen, setBookingModalOpen] = useState(false);
-    const [isPaymentModalOpen, setPaymentModalOpen] = useState(false);
-    const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
-
-    const dailyUnits = units.filter(u => u.type === UnitType.APARTMENT_DAILY);
-    const unitBookings = selectedUnit ? bookings.filter(b => b.unitId === selectedUnit.id).sort((a,b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime()) : [];
-
-    const handleAddBooking = (bookingData: Omit<Booking, 'id' | 'status' | 'balance' | 'payments'>) => {
-        addBooking(bookingData);
-        setBookingModalOpen(false);
-    };
-
-    const handleAddPayment = (paymentData: Omit<Payment, 'id'>) => {
-        if(selectedBooking) {
-            addBookingPayment(selectedBooking.id, paymentData);
-            setPaymentModalOpen(false);
-            setSelectedBooking(null);
-        }
-    };
-
-    return (
-        <Page title="Alquileres Diarios" onBack={() => selectedUnit ? setSelectedUnit(null) : setView('DASHBOARD')}>
-            {!selectedUnit ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {dailyUnits.map(unit => (
-                         <Card key={unit.id} className="cursor-pointer hover:border-indigo-500 border-2 border-transparent transition-colors">
-                             <button onClick={() => setSelectedUnit(unit)} className="w-full text-left">
-                                <h3 className="text-xl font-bold">{unit.name}</h3>
-                                <p className="text-sm text-gray-400">{UNIT_TYPE_LABELS[unit.type]}</p>
-                            </button>
-                        </Card>
-                    ))}
-                </div>
-            ) : (
-                <div>
-                     <div className="flex justify-between items-center mb-4">
-                        <h2 className="text-2xl font-bold">{selectedUnit.name}</h2>
-                        <Button onClick={() => setBookingModalOpen(true)}><PlusCircle size={16}/> Nueva Reserva</Button>
-                     </div>
-
-                    <CalendarComponent bookings={unitBookings} />
-                    
-                    <Card>
-                        <h3 className="text-xl font-semibold mb-2">Reservas</h3>
-                        <div className="space-y-2">
-                        {unitBookings.length > 0 ? unitBookings.map(book => (
-                            <div key={book.id} className="bg-gray-700/50 p-3 rounded-md">
-                                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                                    <div className="flex-1">
-                                        <div className="flex items-center gap-3">
-                                            <span className="font-bold">{book.guestName}</span>
-                                            {getBookingStatusChip(book.status)}
-                                        </div>
-                                        <p className="text-sm text-gray-300">
-                                            {new Date(book.startDate + 'T00:00:00').toLocaleDateString()} - {new Date(book.endDate + 'T00:00:00').toLocaleDateString()}
-                                        </p>
-                                        <p className="text-sm text-gray-400">Total: ${book.totalAmount.toLocaleString()} | Saldo: ${book.balance.toLocaleString()}</p>
-                                    </div>
-                                    <div className="flex gap-2 self-start sm:self-center">
-                                        <Button onClick={() => { setSelectedBooking(book); setPaymentModalOpen(true); }} variant="secondary" disabled={book.status === BookingStatus.PAID}>
-                                            <DollarSign size={16}/> Pagar
-                                        </Button>
-                                        <Button variant="danger" onClick={() => window.confirm('¿Seguro que querés borrar esta reserva?') && deleteBooking(book.id)}>
-                                            <Trash2 size={16}/>
-                                        </Button>
-                                    </div>
-                                </div>
-                                {book.payments.length > 0 && (
-                                    <div className="mt-3 pt-3 border-t border-gray-600/50">
-                                        <h4 className="text-xs font-semibold text-gray-400 mb-2">Pagos:</h4>
-                                        <ul className="text-xs space-y-1">
-                                            {book.payments.map(p => (
-                                                <li key={p.id} className="flex justify-between items-start text-gray-300">
-                                                    <div className="flex-1 pr-2">
-                                                        <span>{new Date(p.date).toLocaleDateString()} - <span className="capitalize">{p.method}</span></span>
-                                                        {p.observations && <p className="text-gray-400 italic">{p.observations}</p>}
-                                                    </div>
-                                                    <span className={`font-semibold ${p.amount < 0 ? 'text-yellow-400' : ''}`}>
-                                                        {p.amount < 0 ? `-$${Math.abs(p.amount).toLocaleString()} (NC)` : `$${p.amount.toLocaleString()}`}
-                                                    </span>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    </div>
-                                )}
-                            </div>
-                        )) : <p className="text-gray-400">No hay reservas para esta unidad.</p>}
-                        </div>
-                    </Card>
-                </div>
-            )}
-            <BookingFormModal isOpen={isBookingModalOpen} onClose={() => setBookingModalOpen(false)} unitId={selectedUnit?.id} addBooking={handleAddBooking} />
-            <BookingPaymentModal isOpen={isPaymentModalOpen} onClose={() => setPaymentModalOpen(false)} booking={selectedBooking} onAddBookingPayment={handleAddPayment} />
-        </Page>
-    );
-};
-
 
 const CalendarView: React.FC<{ setView: (view: View) => void }> = ({ setView }) => {
     const { invoices, setReminderSent } = useApp();
-    const today = new Date();
-    today.setHours(0,0,0,0);
-    const nextWeek = new Date(today);
-    nextWeek.setDate(today.getDate() + 7);
-
-    const dueInvoices = invoices.filter(inv => {
-        const dueDate = new Date(inv.dueDate);
-        return inv.status !== InvoiceStatus.PAID && dueDate >= today && dueDate <= nextWeek;
-    }).sort((a,b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
-
-    const overdueInvoices = invoices.filter(inv => {
-        const dueDate = new Date(inv.dueDate);
-        return inv.status !== InvoiceStatus.PAID && dueDate < today;
-    }).sort((a,b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+    
+    const upcomingInvoices = useMemo(() => 
+        invoices
+            .filter(i => i.status === InvoiceStatus.PENDING || i.status === InvoiceStatus.PARTIAL)
+            .sort((a,b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+    , [invoices]);
 
     const handleSendReminder = (invoice: Invoice) => {
-        const message = `Recordatorio de pago: Su factura para el período ${invoice.period} por un total de $${invoice.totalAmount.toLocaleString()} ha vencido. Saldo pendiente: $${invoice.balance.toLocaleString()}.`;
+        const details = Object.entries(invoice.additionalCharges).map(([key, value]) => `- ${key.charAt(0).toUpperCase() + key.slice(1)}: $${value.toLocaleString()}`).join('\n');
         
-        if ('share' in navigator) {
-            navigator.share({
-                title: 'Recordatorio de Pago',
-                text: message,
-            }).then(() => {
-                setReminderSent(invoice.id);
-            }).catch(console.error);
-        } else {
-            alert(message);
-            setReminderSent(invoice.id);
-        }
+        const message = `Hola ${invoice.tenantName}\nTe recordamos que el ${new Date(invoice.dueDate).toLocaleDateString()} vence tu alquiler del periodo ${invoice.period}.\n\nTotal a pagar: $${invoice.totalAmount.toLocaleString()}\nDetalle:\n- Alquiler: $${invoice.baseRent.toLocaleString()}\n${details}\n\nPor favor avisá si necesitás más información.\n— Monoambientes Chamical`;
+
+        const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+        window.open(whatsappUrl, '_blank');
+        setReminderSent(invoice.id);
     };
-    
+
     return (
         <Page title="Calendario y Avisos" onBack={() => setView('DASHBOARD')}>
-            <div className="space-y-8">
-                <Card>
-                    <h2 className="text-xl font-bold mb-4 text-red-400">Facturas Vencidas</h2>
-                    {overdueInvoices.length > 0 ? (
-                        <div className="space-y-3">
-                            {overdueInvoices.map(inv => (
-                                <div key={inv.id} className="bg-gray-700 p-3 rounded-md flex justify-between items-center">
-                                    <div>
-                                        <p className="font-semibold">{inv.tenantName} - {inv.period}</p>
-                                        <p className="text-sm text-gray-300">Venció: {new Date(inv.dueDate).toLocaleDateString()} | Saldo: ${inv.balance.toLocaleString()}</p>
-                                    </div>
-                                    <Button onClick={() => handleSendReminder(inv)} variant="secondary" disabled={inv.reminderSent}>
-                                        <Send size={16}/> {inv.reminderSent ? 'Enviado' : 'Avisar'}
-                                    </Button>
-                                </div>
-                            ))}
+            <Card>
+                <h2 className="text-xl font-bold mb-4">Próximos Vencimientos</h2>
+                <div className="space-y-3">
+                    {upcomingInvoices.length > 0 ? upcomingInvoices.map(inv => (
+                        <div key={inv.id} className="bg-gray-700/50 p-3 rounded-md flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                            <div>
+                                <p className="font-bold">{inv.tenantName} - ${inv.balance.toLocaleString()}</p>
+                                <p className="text-sm text-gray-300">Vence: {new Date(inv.dueDate).toLocaleDateString()}</p>
+                            </div>
+                            <Button onClick={() => handleSendReminder(inv)} variant={inv.reminderSent ? "secondary" : "primary"}>
+                                <Send size={16}/> {inv.reminderSent ? "Reenviar Aviso" : "Enviar Aviso"}
+                            </Button>
                         </div>
-                    ) : <p className="text-gray-400">No hay facturas vencidas.</p>}
-                </Card>
-                <Card>
-                    <h2 className="text-xl font-bold mb-4 text-yellow-400">Vencimientos Próximos (7 días)</h2>
-                    {dueInvoices.length > 0 ? (
-                        <div className="space-y-3">
-                            {dueInvoices.map(inv => (
-                                <div key={inv.id} className="bg-gray-700 p-3 rounded-md flex justify-between items-center">
-                                    <div>
-                                        <p className="font-semibold">{inv.tenantName} - {inv.period}</p>
-                                        <p className="text-sm text-gray-300">Vence: {new Date(inv.dueDate).toLocaleDateString()} | Saldo: ${inv.balance.toLocaleString()}</p>
-                                    </div>
-                                    <Button onClick={() => handleSendReminder(inv)} variant="secondary" disabled={inv.reminderSent}>
-                                        <Send size={16}/> {inv.reminderSent ? 'Enviado' : 'Avisar'}
-                                    </Button>
-                                </div>
-                            ))}
-                        </div>
-                    ) : <p className="text-gray-400">No hay vencimientos en los próximos 7 días.</p>}
-                </Card>
-            </div>
+                    )) : <p className="text-gray-400">No hay vencimientos pendientes.</p>}
+                </div>
+            </Card>
         </Page>
     );
 };
 
 const ReportsView: React.FC<{ setView: (view: View) => void }> = ({ setView }) => {
-    const { invoices, contracts, bookings, units } = useApp();
-    const [filter, setFilter] = useState({ year: new Date().getFullYear().toString(), month: 'all', unitId: 'all' });
-    const printRef = useRef(null);
-    
-    const allUnits = useMemo(() => units, [units]);
+    const { invoices, bookings, contracts, units } = useApp();
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
+    const [selectedUnitId, setSelectedUnitId] = useState('');
+    const [reportData, setReportData] = useState<any[] | null>(null);
 
-    const getUnitName = useCallback((unitId: string) => {
-        return allUnits.find(u => u.id === unitId)?.name || 'N/A';
-    }, [allUnits]);
+    const generateReport = () => {
+        const start = startDate ? new Date(startDate + 'T00:00:00') : null;
+        const end = endDate ? new Date(endDate + 'T23:59:59') : null;
 
-    const reportData = useMemo(() => {
-        let allPayments: (Payment & { type: string; details: string; unitId: string })[] = [];
+        const dateFilter = (pDate: Date) => {
+            if (start && pDate < start) return false;
+            if (end && pDate > end) return false;
+            return true;
+        };
 
-        invoices.forEach(inv => {
-            inv.payments.forEach(p => {
-                const paymentDate = new Date(p.date);
-                if ((filter.year === 'all' || paymentDate.getFullYear().toString() === filter.year) &&
-                    (filter.month === 'all' || (paymentDate.getMonth() + 1).toString() === filter.month) &&
-                    (filter.unitId === 'all' || inv.unitId === filter.unitId)) {
-                    allPayments.push({ ...p, type: 'Alquiler Mensual', details: `Factura ${inv.period}`, unitId: inv.unitId });
-                }
-            });
-        });
+        const unitFilter = (unitId: string) => {
+            if (!selectedUnitId) return true; // 'All' is selected
+            return unitId === selectedUnitId;
+        };
 
-        contracts.forEach(c => {
-            c.depositPayments.forEach(p => {
-                const paymentDate = new Date(p.date);
-                if ((filter.year === 'all' || paymentDate.getFullYear().toString() === filter.year) &&
-                    (filter.month === 'all' || (paymentDate.getMonth() + 1).toString() === filter.month) &&
-                    (filter.unitId === 'all' || c.unitId === filter.unitId)) {
-                    allPayments.push({ ...p, type: 'Depósito', details: `Contrato ${c.tenantName}`, unitId: c.unitId });
-                }
-            });
-        });
-
-        bookings.forEach(b => {
-            b.payments.forEach(p => {
-                const paymentDate = new Date(p.date);
-                 if ((filter.year === 'all' || paymentDate.getFullYear().toString() === filter.year) &&
-                    (filter.month === 'all' || (paymentDate.getMonth() + 1).toString() === filter.month) &&
-                    (filter.unitId === 'all' || b.unitId === filter.unitId)) {
-                    allPayments.push({ ...p, type: 'Alquiler Diario', details: `Reserva ${b.guestName}`, unitId: b.unitId });
-                }
-            });
-        });
-
-        return allPayments.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    }, [invoices, contracts, bookings, filter]);
-    
-    const totalIncome = useMemo(() => reportData.reduce((sum, p) => sum + p.amount, 0), [reportData]);
-    
-    const handlePrint = () => {
-        const printWindow = window.open('', '', 'height=800,width=1000');
-        if (printWindow && printRef.current) {
-            const content = (printRef.current as HTMLDivElement).innerHTML;
-            printWindow.document.write('<html><head><title>Reporte de Ingresos</title>');
-            printWindow.document.write('<style>body{font-family:sans-serif;padding:20px;} table{width:100%;border-collapse:collapse;} th,td{border:1px solid #ddd;padding:8px;text-align:left;} th{background-color:#f2f2f2;}</style>');
-            printWindow.document.write('</head><body>');
-            printWindow.document.write(`<h1>Reporte de Ingresos - ${filter.month === 'all' ? `Año ${filter.year}` : `${filter.month}/${filter.year}`}</h1>`);
-            printWindow.document.write(`<h2>Total: $${totalIncome.toLocaleString()}</h2>`);
-            printWindow.document.write(content);
-            printWindow.document.write('</body></html>');
-            printWindow.document.close();
-            printWindow.focus();
-            setTimeout(() => { printWindow.print(); }, 500);
-        }
-    };
-    
-    const handleExport = () => {
-        const headers = ["Fecha", "Departamento", "Tipo", "Detalles", "Pagador", "Método", "Observaciones", "Monto"];
-        const csvContent = "data:text/csv;charset=utf-8," 
-            + headers.join(",") + "\n" 
-            + reportData.map(p => [
-                new Date(p.date).toLocaleDateString(),
-                `"${getUnitName(p.unitId)}"`,
-                p.type,
-                `"${p.details}"`,
-                `"${p.payerName}"`,
-                p.method,
-                `"${p.observations || ''}"`,
-                p.amount
-            ].join(",")).join("\n");
+        const invoicePayments = invoices.filter(inv => unitFilter(inv.unitId)).flatMap(inv => 
+            inv.payments.filter(p => dateFilter(new Date(p.date)))
+            .map(p => ({
+                date: new Date(p.date),
+                type: 'Ingreso Alquiler Mensual',
+                description: `Pago de ${inv.tenantName} (Período ${inv.period})`,
+                amount: p.amount
+            }))
+        );
         
+        const depositPayments = contracts.filter(c => unitFilter(c.unitId)).flatMap(c => 
+            c.depositPayments.filter(p => dateFilter(new Date(p.date)))
+            .map(p => ({
+                date: new Date(p.date),
+                type: 'Ingreso Depósito',
+                description: `Depósito de ${c.tenantName}`,
+                amount: p.amount
+            }))
+        );
+
+        const bookingPayments = bookings.filter(book => unitFilter(book.unitId)).flatMap(book => 
+            book.payments.filter(p => dateFilter(new Date(p.date)))
+            .map(p => ({
+                date: new Date(p.date),
+                type: 'Ingreso Alquiler Diario',
+                description: `Pago de ${book.guestName} (${new Date(book.startDate + 'T12:00:00').toLocaleDateString()} - ${new Date(book.endDate + 'T12:00:00').toLocaleDateString()})`,
+                amount: p.amount
+            }))
+        );
+
+        const combinedReportData = [...invoicePayments, ...depositPayments, ...bookingPayments]
+            .sort((a, b) => a.date.getTime() - b.date.getTime())
+            .map(item => ({...item, date: item.date.toLocaleDateString() }));
+        
+        setReportData(combinedReportData);
+    };
+
+    const exportToCSV = () => {
+        if (!reportData) return;
+        const header = 'Fecha,Tipo,Descripción,Monto\n';
+        const rows = reportData.map(r => `${r.date},"${r.type}","${r.description}",${r.amount}`).join('\n');
+        const csvContent = "data:text/csv;charset=utf-8," + '\uFEFF' + header + rows;
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement("a");
         link.setAttribute("href", encodedUri);
-        link.setAttribute("download", `reporte_ingresos_${filter.year}_${filter.month}.csv`);
+        link.setAttribute("download", "reporte_monoambientes.csv");
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
     };
 
-    const years = [...new Set(
-        [...invoices, ...contracts, ...bookings].flatMap(item => 'payments' in item ? item.payments : item.depositPayments).map(p => new Date(p.date).getFullYear())
-    )].sort((a,b) => b-a);
-    
-    return (
-        <Page title="Reportes" onBack={() => setView('DASHBOARD')} actions={
-            <>
-                <Button onClick={handlePrint} variant="secondary"><Printer size={16}/> Imprimir</Button>
-                <Button onClick={handleExport} variant="secondary"><FileDown size={16}/> Exportar</Button>
-            </>
-        }>
-            <Card>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 p-4 bg-gray-700/50 rounded-lg">
-                    <Select label="Año" value={filter.year} onChange={e => setFilter(f => ({...f, year: e.target.value}))}>
-                        {years.map(y => <option key={y} value={y}>{y}</option>)}
-                    </Select>
-                    <Select label="Mes" value={filter.month} onChange={e => setFilter(f => ({...f, month: e.target.value}))}>
-                        <option value="all">Todos</option>
-                        {Array.from({length: 12}, (_, i) => <option key={i+1} value={i+1}>{new Date(0, i).toLocaleString('es', {month: 'long'})}</option>)}
-                    </Select>
-                    <Select label="Departamento" value={filter.unitId} onChange={e => setFilter(f => ({...f, unitId: e.target.value}))}>
-                       <option value="all">Todos</option>
-                       {allUnits.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                    </Select>
-                </div>
-
-                <div className="mb-4 text-right">
-                    <h3 className="text-xl font-bold">Total Ingresos: <span className="text-green-400">${totalIncome.toLocaleString()}</span></h3>
-                </div>
-
-                <div className="overflow-x-auto" ref={printRef}>
-                    <table className="min-w-full divide-y divide-gray-700">
-                        <thead className="bg-gray-700">
+    const printReport = () => {
+        const printWindow = window.open('', '_blank');
+        if(printWindow) {
+            printWindow.document.write(`
+                <html>
+                <head>
+                    <title>Reporte de Pagos</title>
+                    <style>
+                        body { font-family: sans-serif; }
+                        h1, h2, p { margin: 0; }
+                        header { margin-bottom: 20px; text-align: center; }
+                        table { width: 100%; border-collapse: collapse; }
+                        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+                        th { background-color: #f2f2f2; }
+                    </style>
+                </head>
+                <body>
+                    <header>
+                        <h1>Monoambientes Chamical</h1>
+                        <p>Reporte de pagos y vencimientos</p>
+                        <p>Generado el: ${new Date().toLocaleDateString()}</p>
+                    </header>
+                    <table>
+                        <thead>
                             <tr>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Fecha</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Departamento</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Tipo</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Detalles</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Monto</th>
+                                <th>Fecha</th>
+                                <th>Tipo</th>
+                                <th>Descripción</th>
+                                <th>Monto</th>
                             </tr>
                         </thead>
-                        <tbody className="bg-gray-800 divide-y divide-gray-700">
-                            {reportData.map(p => (
-                                <tr key={p.id}>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{new Date(p.date).toLocaleDateString()}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{getUnitName(p.unitId)}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{p.type}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{p.details}</td>
-                                    <td className={`px-6 py-4 whitespace-nowrap text-sm font-semibold ${p.amount < 0 ? 'text-yellow-400' : 'text-green-400'}`}>
-                                        {p.amount.toLocaleString('es-AR', { style: 'currency', currency: 'ARS' })}
-                                    </td>
+                        <tbody>
+                            ${(reportData || []).map(r => `
+                                <tr>
+                                    <td>${r.date}</td>
+                                    <td>${r.type}</td>
+                                    <td>${r.description}</td>
+                                    <td>$${r.amount.toLocaleString()}</td>
                                 </tr>
-                            ))}
+                            `).join('')}
                         </tbody>
                     </table>
+                </body>
+                </html>
+            `);
+            printWindow.document.close();
+            printWindow.print();
+        }
+    };
+
+    return (
+        <Page title="Reportes" onBack={() => setView('DASHBOARD')}>
+            <Card>
+                <div className="flex flex-col sm:flex-row flex-wrap gap-4 items-end mb-6">
+                    <Input label="Fecha Desde" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
+                    <Input label="Fecha Hasta" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1">Departamento</label>
+                        <select
+                            value={selectedUnitId}
+                            onChange={e => setSelectedUnitId(e.target.value)}
+                            className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 min-w-[200px]"
+                        >
+                            <option value="">Todos</option>
+                            {units.map(unit => (
+                                <option key={unit.id} value={unit.id}>{unit.name}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <Button onClick={generateReport}>Generar Reporte</Button>
                 </div>
-                {reportData.length === 0 && <p className="text-center text-gray-400 mt-6">No hay datos para los filtros seleccionados.</p>}
+
+                {reportData && (
+                    <div>
+                        <div className="flex gap-2 mb-4">
+                            <Button onClick={printReport} variant="secondary"><Printer size={16}/> Imprimir/PDF</Button>
+                            <Button onClick={exportToCSV} variant="secondary"><FileDown size={16}/> Exportar a CSV</Button>
+                        </div>
+                        <div className="overflow-x-auto">
+                           <table className="w-full text-left">
+                                <thead className="bg-gray-700">
+                                    <tr>
+                                        <th className="p-3">Fecha</th>
+                                        <th className="p-3">Tipo</th>
+                                        <th className="p-3">Descripción</th>
+                                        <th className="p-3">Monto</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {reportData.map((row, i) => (
+                                        <tr key={i} className="border-b border-gray-700">
+                                            <td className="p-3">{row.date}</td>
+                                            <td className="p-3">{row.type}</td>
+                                            <td className="p-3">{row.description}</td>
+                                            <td className="p-3">${row.amount.toLocaleString()}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                           </table>
+                        </div>
+                    </div>
+                )}
+                 {reportData && reportData.length === 0 && <p className="text-gray-400 mt-4">No se encontraron datos para los filtros seleccionados.</p>}
             </Card>
         </Page>
     );
 };
 
 const SettingsView: React.FC<{ setView: (view: View) => void }> = ({ setView }) => {
-    const { settings, updateSettings, units, contracts, invoices, bookings } = useApp();
-    const auth = useAuth();
-    const { isBiometricRegistered, isBiometricSupported, registerBiometrics, deregisterBiometrics } = auth;
+    const { settings, updateSettings } = useApp();
+    const { isBiometricSupported, isBiometricRegistered, registerBiometrics, deregisterBiometrics } = useAuth();
     const [currentSettings, setCurrentSettings] = useState(settings);
-    const [passwordChange, setPasswordChange] = useState({ old: '', new: '', confirm: ''});
-    
-    const fileInputRef = useRef<HTMLInputElement>(null);
+    const [showSuccess, setShowSuccess] = useState(false);
+    const [isRegistering, setIsRegistering] = useState(false);
 
-    const handleSettingsChange = <K extends keyof GlobalSettings>(key: K, value: GlobalSettings[K]) => {
-        setCurrentSettings(prev => ({ ...prev, [key]: value }));
-    };
+    useEffect(() => {
+        setCurrentSettings(settings);
+    }, [settings]);
 
     const handleSave = () => {
         updateSettings(currentSettings);
-        alert('Configuración guardada!');
-    };
-    
-    const handlePasswordChange = async (e: React.FormEvent) => {
-        e.preventDefault();
-        const { old, new: newPass, confirm } = passwordChange;
-        if (newPass !== confirm) {
-            alert("Las nuevas contraseñas no coinciden.");
-            return;
-        }
-
-        const correctOld = await auth.loginWithPassword(old);
-
-        if (correctOld) {
-            await auth.setupPassword(newPass);
-            alert("Contraseña cambiada con éxito.");
-            setPasswordChange({ old: '', new: '', confirm: ''});
-            auth.logout(); // For security, log out after password change.
-        } else {
-            alert("La contraseña actual es incorrecta.");
-        }
+        setShowSuccess(true);
+        setTimeout(() => setShowSuccess(false), 3000);
     };
 
-    const handleBackup = () => {
-        const backupData = {
-            units: localStorage.getItem('units'),
-            contracts: localStorage.getItem('contracts'),
-            invoices: localStorage.getItem('invoices'),
-            bookings: localStorage.getItem('bookings'),
-            settings: localStorage.getItem('settings'),
-            passwordHash: localStorage.getItem('passwordHash'),
-            userId: localStorage.getItem('userId'),
-            biometricCredentialId: localStorage.getItem('biometricCredentialId'),
-        };
-        const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        const date = new Date().toISOString().split('T')[0];
-        link.href = url;
-        link.download = `monoambientes-backup-${date}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-        
-        alert(`Copia de seguridad creada con éxito. Resumen:\n` +
-              `${units.length} Unidades\n` +
-              `${contracts.length} Contratos\n` +
-              `${invoices.length} Facturas\n` +
-              `${bookings.length} Reservas`);
+    const handleChargeChange = <K extends keyof GlobalSettings['additionalCharges']>(key: K, value: string) => {
+        setCurrentSettings(prev => ({ ...prev, additionalCharges: { ...prev.additionalCharges, [key]: Number(value) } }));
     };
 
-    const handleRestore = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            try {
-                const text = e.target?.result;
-                if (typeof text !== 'string') {
-                    throw new Error("El archivo no es válido.");
-                }
-                const restoredData = JSON.parse(text);
-
-                // Validation
-                const requiredKeys = ['units', 'contracts', 'invoices', 'bookings', 'settings', 'passwordHash'];
-                if (!requiredKeys.every(key => key in restoredData && typeof restoredData[key] === 'string')) {
-                     throw new Error("El archivo de respaldo está incompleto o corrupto.");
-                }
-                
-                // Summary
-                const summary = {
-                    units: JSON.parse(restoredData.units).length,
-                    contracts: JSON.parse(restoredData.contracts).length,
-                    invoices: JSON.parse(restoredData.invoices).length,
-                    bookings: JSON.parse(restoredData.bookings).length,
-                }
-
-                if (window.confirm("¿Seguro que querés restaurar los datos? Se sobreescribirán todos los datos actuales.")) {
-                    Object.keys(restoredData).forEach(key => {
-                        if (restoredData[key]) {
-                            localStorage.setItem(key, restoredData[key]);
-                        } else {
-                            localStorage.removeItem(key);
-                        }
-                    });
-                     alert(`Restauración completada.\n`+
-                           `Se cargaron: ${summary.units} Unidades, ${summary.contracts} Contratos, ${summary.invoices} Facturas, ${summary.bookings} Reservas.\n`+
-                           `La aplicación se reiniciará ahora.`);
-                    window.location.reload();
-                }
-            } catch (error) {
-                console.error("Error al restaurar:", error);
-                alert("Error al leer el archivo de respaldo. Asegúrate de que no esté dañado.");
-            } finally {
-                 // Reset file input
-                if(fileInputRef.current) {
-                    fileInputRef.current.value = "";
-                }
-            }
-        };
-        reader.readAsText(file);
+    const handleRateChange = <K extends keyof GlobalSettings['dailyRates']>(key: K, value: string) => {
+        setCurrentSettings(prev => ({ ...prev, dailyRates: { ...prev.dailyRates, [key]: Number(value) } }));
     };
+
+    const handleRegisterBiometrics = async () => {
+        setIsRegistering(true);
+        await registerBiometrics();
+        setIsRegistering(false);
+    }
 
     return (
-        <Page title="Configuración" onBack={() => setView('DASHBOARD')} actions={<Button onClick={handleSave}>Guardar Cambios</Button>}>
-            <div className="space-y-8">
+        <Page title="Configuración" onBack={() => setView('DASHBOARD')}>
+            <div className="space-y-6">
                 <Card>
-                    <h2 className="text-xl font-bold mb-4">Tarifas Diarias</h2>
-                    <div className="grid grid-cols-2 gap-4">
-                        <Input label="1 Persona" type="number" value={currentSettings.dailyRates.p1} onChange={e => handleSettingsChange('dailyRates', {...currentSettings.dailyRates, p1: parseFloat(e.target.value) || 0})} />
-                        <Input label="2 Personas" type="number" value={currentSettings.dailyRates.p2} onChange={e => handleSettingsChange('dailyRates', {...currentSettings.dailyRates, p2: parseFloat(e.target.value) || 0})} />
-                        <Input label="3 Personas" type="number" value={currentSettings.dailyRates.p3} onChange={e => handleSettingsChange('dailyRates', {...currentSettings.dailyRates, p3: parseFloat(e.target.value) || 0})} />
-                        <Input label="4+ Personas" type="number" value={currentSettings.dailyRates.p4} onChange={e => handleSettingsChange('dailyRates', {...currentSettings.dailyRates, p4: parseFloat(e.target.value) || 0})} />
+                    <div className="space-y-6">
+                        <div>
+                            <h3 className="text-xl font-bold mb-3">Gastos Adicionales Globales</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <Input label="Internet" type="number" value={currentSettings.additionalCharges.internet} onChange={e => handleChargeChange('internet', e.target.value)} />
+                                <Input label="Muebles" type="number" value={currentSettings.additionalCharges.furniture} onChange={e => handleChargeChange('furniture', e.target.value)} />
+                                <Input label="Otros" type="number" value={currentSettings.additionalCharges.other} onChange={e => handleChargeChange('other', e.target.value)} />
+                            </div>
+                        </div>
+                         <div>
+                            <h3 className="text-xl font-bold mb-3">Tarifas Alquiler Diario</h3>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <Input label="1 Persona" type="number" value={currentSettings.dailyRates.p1} onChange={e => handleRateChange('p1', e.target.value)} />
+                                <Input label="2 Personas" type="number" value={currentSettings.dailyRates.p2} onChange={e => handleRateChange('p2', e.target.value)} />
+                                <Input label="3 Personas" type="number" value={currentSettings.dailyRates.p3} onChange={e => handleRateChange('p3', e.target.value)} />
+                                <Input label="4 Personas" type="number" value={currentSettings.dailyRates.p4} onChange={e => handleRateChange('p4', e.target.value)} />
+                            </div>
+                        </div>
+                        <div>
+                            <h3 className="text-xl font-bold mb-3">Reserva Diaria</h3>
+                            <Input label="Porcentaje de Seña (%)" type="number" value={currentSettings.bookingDepositPercentage} onChange={e => setCurrentSettings(prev => ({ ...prev, bookingDepositPercentage: Number(e.target.value) }))} />
+                        </div>
+                    </div>
+
+                    <div className="mt-8 pt-6 border-t border-gray-700 flex justify-end items-center gap-4">
+                        {showSuccess && <p className="text-sm text-green-400">Guardado con éxito!</p>}
+                        <Button onClick={handleSave}>Guardar Cambios</Button>
                     </div>
                 </Card>
+
                 <Card>
-                    <h2 className="text-xl font-bold mb-4">Configuración General</h2>
-                     <Input 
-                        label="Porcentaje de Depósito para Reservas (%)" 
-                        type="number" 
-                        value={currentSettings.bookingDepositPercentage} 
-                        onChange={e => handleSettingsChange('bookingDepositPercentage', parseFloat(e.target.value) || 0)} 
-                    />
-                </Card>
-                 <Card>
-                    <h2 className="text-xl font-bold mb-4">Seguridad</h2>
-                    {isBiometricSupported && (
-                        <div className="flex items-center justify-between p-3 bg-gray-700/50 rounded-md">
-                            <div className="flex items-center gap-3">
-                                <Fingerprint className="text-indigo-400" />
-                                <div>
-                                    <p className="font-semibold">Acceso Biométrico</p>
-                                    <p className="text-sm text-gray-400">{isBiometricRegistered ? "Habilitado" : "Deshabilitado"}</p>
-                                </div>
+                    <h3 className="text-xl font-bold mb-3">Seguridad</h3>
+                    {isBiometricSupported ? (
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <p className="font-semibold">Inicio de sesión biométrico</p>
+                                <p className="text-sm text-gray-400">Usa tu huella dactilar o reconocimiento facial para acceder.</p>
                             </div>
                             {isBiometricRegistered ? (
-                                <Button variant="danger" onClick={deregisterBiometrics}>Deshabilitar</Button>
+                                <Button onClick={deregisterBiometrics} variant="danger">Desactivar</Button>
                             ) : (
-                                <Button onClick={registerBiometrics}>Habilitar</Button>
+                                <Button onClick={handleRegisterBiometrics} disabled={isRegistering}>{isRegistering ? "Registrando..." : "Activar"}</Button>
                             )}
                         </div>
+                    ) : (
+                        <p className="text-gray-400">El inicio de sesión biométrico no es compatible con este dispositivo o navegador.</p>
                     )}
-                </Card>
-                <Card>
-                     <h2 className="text-xl font-bold mb-4">Copia de Seguridad y Restauración</h2>
-                     <p className="text-sm text-gray-400 mb-4">Guarda todos tus datos en un archivo para transferirlos a otro dispositivo o guardarlos como respaldo.</p>
-                     <div className="flex gap-4">
-                        <Button onClick={handleBackup}><FileDown size={16} /> Crear y Descargar Copia</Button>
-                        <Button variant="secondary" onClick={() => fileInputRef.current?.click()}><FileUp size={16} /> Restaurar desde Archivo</Button>
-                        <input type="file" ref={fileInputRef} onChange={handleRestore} accept=".json" className="hidden" />
-                     </div>
                 </Card>
             </div>
         </Page>
     );
 };
 
-
-// --- APP CONTAINER & ROUTING ---
-const AppContent: React.FC = () => {
-    const [view, setView] = useState<View>('DASHBOARD');
-
-    switch (view) {
-        case 'DASHBOARD': return <Dashboard setView={setView} />;
-        case 'MONTHLY': return <MonthlyView setView={setView} />;
-        case 'DAILY': return <DailyView setView={setView} />;
-        case 'CALENDAR': return <CalendarView setView={setView} />;
-        case 'REPORTS': return <ReportsView setView={setView} />;
-        case 'SETTINGS': return <SettingsView setView={setView} />;
-        default: return <Dashboard setView={setView} />;
-    }
-};
-
-const AuthScreen: React.FC = () => {
-    const { 
-        isPasswordSet, 
-        setupPassword, 
-        loginWithPassword, 
-        isBiometricRegistered, 
-        isBiometricSupported, 
-        loginWithBiometrics 
-    } = useAuth();
+const LoginScreen: React.FC = () => {
+    const { isPasswordSet, setupPassword, loginWithPassword, isBiometricSupported, isBiometricRegistered, loginWithBiometrics } = useAuth();
+    const [mode, setMode] = useState<'setup' | 'login'>(isPasswordSet ? 'login' : 'setup');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [error, setError] = useState('');
+    const [isLoggingIn, setIsLoggingIn] = useState(false);
 
-    const handleLogin = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setError('');
-        const success = await loginWithPassword(password);
-        if (!success) {
-            setError('Contraseña incorrecta.');
-        }
-    };
-    
     const handleSetup = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
-        if (password !== confirmPassword) {
-            setError('Las contraseñas no coinciden.');
-            return;
-        }
         if (password.length < 4) {
             setError('La contraseña debe tener al menos 4 caracteres.');
             return;
         }
+        if (password !== confirmPassword) {
+            setError('Las contraseñas no coinciden.');
+            return;
+        }
+        setIsLoggingIn(true);
         await setupPassword(password);
+        setIsLoggingIn(false);
+    };
+    
+    const handleLogin = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+        setIsLoggingIn(true);
+        const success = await loginWithPassword(password);
+        if (!success) {
+            setError('Contraseña incorrecta.');
+        }
+        setIsLoggingIn(false);
     };
 
     const handleBiometricLogin = async () => {
         setError('');
+        setIsLoggingIn(true);
         const success = await loginWithBiometrics();
         if(!success) {
-            setError('Fallo en la autenticación biométrica. Intentá con tu contraseña.');
+            setError('Falló el inicio de sesión biométrico.');
         }
-    };
+        setIsLoggingIn(false);
+    }
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-900 p-4">
+        <div className="flex items-center justify-center min-h-screen p-4">
             <div className="w-full max-w-sm">
                 <div className="text-center mb-8">
-                    <Home className="mx-auto h-12 w-12 text-indigo-400" />
-                    <h1 className="text-3xl font-bold text-white mt-4">Monoambientes Chamical</h1>
-                    <p className="text-gray-400">{isPasswordSet ? "Iniciar Sesión" : "Crear Contraseña Maestra"}</p>
+                    <Home className="w-12 h-12 text-indigo-400 mx-auto mb-3" />
+                    <h1 className="text-3xl font-extrabold text-white tracking-tight">Monoambientes Chamical</h1>
+                    <p className="text-gray-400 mt-2">{mode === 'setup' ? 'Configurá tu acceso seguro' : 'Iniciar Sesión'}</p>
                 </div>
                 
-                <Card>
-                    <form onSubmit={isPasswordSet ? handleLogin : handleSetup} className="space-y-6">
-                        <Input 
-                            label={isPasswordSet ? "Contraseña" : "Nueva Contraseña"} 
-                            type="password" 
-                            value={password}
-                            onChange={e => setPassword(e.target.value)}
-                            required 
-                        />
-                        {!isPasswordSet && (
-                            <Input 
-                                label="Confirmar Contraseña" 
-                                type="password" 
-                                value={confirmPassword}
-                                onChange={e => setConfirmPassword(e.target.value)}
-                                required 
-                            />
-                        )}
-
-                        {error && <p className="text-red-400 text-sm">{error}</p>}
-                        
-                        <Button type="submit" className="w-full">
-                            <KeyRound size={16} />
-                            {isPasswordSet ? "Ingresar" : "Guardar Contraseña"}
-                        </Button>
-                    </form>
-                    {isPasswordSet && isBiometricRegistered && isBiometricSupported && (
-                        <>
-                            <div className="my-4 flex items-center">
-                                <hr className="flex-grow border-gray-600" />
-                                <span className="mx-2 text-gray-400 text-sm">o</span>
-                                <hr className="flex-grow border-gray-600" />
+                <Card className="!p-8">
+                    {mode === 'setup' ? (
+                        <form onSubmit={handleSetup} className="space-y-6">
+                            <div>
+                                <p className="text-center text-gray-300 mb-4">Crea una contraseña maestra para proteger tus datos. Esta será tu clave principal.</p>
+                                <Input label="Crear Contraseña" type="password" value={password} onChange={e => setPassword(e.target.value)} required />
                             </div>
-                            <Button onClick={handleBiometricLogin} variant="secondary" className="w-full">
-                                <Fingerprint size={16} />
-                                Ingresar con Huella
+                            <Input label="Confirmar Contraseña" type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required />
+                            {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+                            <Button type="submit" className="w-full" disabled={isLoggingIn}>
+                                <KeyRound size={16}/> {isLoggingIn ? "Configurando..." : "Guardar y Entrar"}
                             </Button>
-                        </>
+                        </form>
+                    ) : (
+                        <form onSubmit={handleLogin} className="space-y-6">
+                            <Input label="Contraseña" type="password" value={password} onChange={e => setPassword(e.target.value)} required />
+                             {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+                            <Button type="submit" className="w-full" disabled={isLoggingIn}>
+                                <KeyRound size={16}/> {isLoggingIn ? "Entrando..." : "Entrar"}
+                            </Button>
+                            {isBiometricSupported && isBiometricRegistered && (
+                                <>
+                                    <div className="relative my-2">
+                                        <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-600"></div></div>
+                                        <div className="relative flex justify-center text-sm"><span className="px-2 bg-gray-800 text-gray-400">o</span></div>
+                                    </div>
+                                    <Button type="button" variant="secondary" className="w-full" onClick={handleBiometricLogin} disabled={isLoggingIn}>
+                                        <Fingerprint size={16}/> Iniciar con Biometría
+                                    </Button>
+                                </>
+                            )}
+                        </form>
                     )}
                 </Card>
             </div>
@@ -1764,21 +1548,96 @@ const AuthScreen: React.FC = () => {
     );
 };
 
-const App: React.FC = () => {
-    const auth = useAuthData();
+// --- NOTIFICATION HOOK ---
+const useArrivalNotifications = (bookings: Booking[], markAsSent: (bookingId: string) => void) => {
+    useEffect(() => {
+        if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+            Notification.requestPermission();
+        }
+    }, []);
+
+    useEffect(() => {
+        const checkArrivals = () => {
+            if (!('Notification' in window) || Notification.permission !== 'granted') {
+                return;
+            }
+
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+            bookings.forEach(booking => {
+                const bookingStartDate = new Date(booking.startDate + 'T12:00:00');
+                const bookingDay = new Date(bookingStartDate.getFullYear(), bookingStartDate.getMonth(), bookingStartDate.getDate());
+
+                if (booking.estimatedArrivalTime && !booking.notificationSent && today.getTime() === bookingDay.getTime()) {
+                    const [hours, minutes] = booking.estimatedArrivalTime.split(':').map(Number);
+                    
+                    const arrivalTime = new Date(bookingDay);
+                    arrivalTime.setHours(hours, minutes);
+
+                    const notificationTime = new Date(arrivalTime.getTime() - 30 * 60 * 1000);
+
+                    if (now >= notificationTime && now < arrivalTime) {
+                        new Notification('Recordatorio de Llegada', {
+                            body: `El huésped ${booking.guestName} tiene previsto llegar a las ${booking.estimatedArrivalTime}hs.`,
+                            icon: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='192' height='192' viewBox='0 0 24 24' fill='none' stroke='%234f46e5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'%3E%3C/path%3E%3Cpolyline points='9 22 9 12 15 12 15 22'%3E%3C/polyline%3E%3C/svg%3E",
+                            tag: `arrival-${booking.id}`
+                        });
+                        markAsSent(booking.id);
+                    }
+                }
+            });
+        };
+
+        const intervalId = setInterval(checkArrivals, 60 * 1000); // Check every minute
+
+        return () => clearInterval(intervalId);
+    }, [bookings, markAsSent]);
+};
+
+
+// --- MAIN APP COMPONENT ---
+function MainApp() {
+    const [view, setView] = useState<View>('DASHBOARD');
     const appData = useAppData();
 
-    if (!auth.isInitialized) {
-        return <div className="bg-gray-900 min-h-screen"></div>; // Loading screen
+    useArrivalNotifications(appData.bookings, appData.markBookingNotificationSent);
+
+    const renderView = () => {
+        switch (view) {
+            case 'DASHBOARD': return <Dashboard setView={setView} />;
+            case 'MONTHLY': return <MonthlyView setView={setView} />;
+            case 'DAILY': return <DailyView setView={setView} />;
+            case 'CALENDAR': return <CalendarView setView={setView} />;
+            case 'REPORTS': return <ReportsView setView={setView} />;
+            case 'SETTINGS': return <SettingsView setView={setView} />;
+            default: return <Dashboard setView={setView} />;
+        }
+    };
+
+    return (
+        <AppContext.Provider value={appData}>
+            <div className="min-h-screen bg-gray-900 text-gray-100">
+                {renderView()}
+            </div>
+        </AppContext.Provider>
+    );
+}
+
+export default function App() {
+    const authData = useAuthData();
+    
+    if (!authData.isInitialized) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-gray-900 text-gray-100">
+                <p>Cargando aplicación...</p>
+            </div>
+        );
     }
     
     return (
-        <AuthContext.Provider value={auth}>
-            <AppContext.Provider value={appData}>
-                {auth.isAuthenticated ? <AppContent /> : <AuthScreen />}
-            </AppContext.Provider>
+        <AuthContext.Provider value={authData}>
+             {authData.isAuthenticated ? <MainApp /> : <LoginScreen />}
         </AuthContext.Provider>
     );
-};
-
-export default App;
+}
