@@ -83,6 +83,10 @@ export interface Booking {
   status: BookingStatus;
   balance: number;
   payments: Payment[];
+  // New fields for daily rentals
+  docNumber: string;
+  nationality: string;
+  phone: string;
 }
 
 export interface GlobalSettings {

@@ -1,8 +1,9 @@
 
+
 import React, { useState, useEffect, createContext, useContext, useCallback, useMemo, useRef } from 'react';
 import { Unit, Contract, Invoice, Booking, GlobalSettings, Payment, UnitType, InvoiceStatus, BookingStatus, PaymentMethod } from './types';
 import { INITIAL_UNITS, INITIAL_SETTINGS, UNIT_TYPE_LABELS } from './constants';
-import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Fingerprint, FileUp, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Home, FileText, Calendar, BedDouble, Settings, BarChart2, ArrowLeft, PlusCircle, Edit, Trash2, Send, DollarSign, Printer, FileDown, LogOut, KeyRound, Fingerprint, FileUp, ChevronLeft, ChevronRight, TrendingUp } from 'lucide-react';
 
 // --- AUTH HELPERS ---
 async function hashPassword(password: string): Promise<string> {
@@ -240,17 +241,17 @@ const useAppData = () => {
         let finalUpdatedContract = { ...updatedContract };
     
         if (originalContract.depositStatus !== InvoiceStatus.PAID && originalContract.monthlyRent !== finalUpdatedContract.monthlyRent) {
-            const totalPaid = originalContract.depositPayments.filter(p => p.amount > 0).reduce((s, p) => s + p.amount, 0);
-            const totalCredited = originalContract.depositPayments.filter(p => p.amount < 0).reduce((s, p) => s + Math.abs(p.amount), 0);
+            const paidAmount = originalContract.depositAmount - originalContract.depositBalance;
             const newDepositAmount = finalUpdatedContract.monthlyRent;
-            const newBalance = newDepositAmount - totalPaid - totalCredited;
-            const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (totalPaid > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
+            const newBalance = newDepositAmount - paidAmount;
+            const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (paidAmount > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
             
             finalUpdatedContract = {
                 ...finalUpdatedContract,
                 depositAmount: newDepositAmount,
                 depositBalance: newBalance,
                 depositStatus: newStatus,
+                depositPayments: originalContract.depositPayments,
             };
         }
     
@@ -273,18 +274,17 @@ const useAppData = () => {
 
             invoicesForThisContract.forEach(inv => {
                 if (newContractPeriods.has(inv.period)) {
-                    let updatedInvoice = { ...inv };
                     const [year, month] = inv.period.split('-').map(Number);
+                    const newTotalAmount = finalUpdatedContract.monthlyRent + Object.values(finalUpdatedContract.additionalCharges).reduce((a, b) => a + b, 0);
+                    let updatedInvoice = { ...inv };
                     
                     updatedInvoice.tenantName = finalUpdatedContract.tenantName;
                     updatedInvoice.dueDate = new Date(year, month - 1, contractStartDay).toISOString();
                     
                     if (updatedInvoice.status !== InvoiceStatus.PAID) {
-                        const newTotalAmount = finalUpdatedContract.monthlyRent + Object.values(finalUpdatedContract.additionalCharges).reduce((a, b) => a + b, 0);
-                        const totalPaid = inv.payments.filter(p => p.amount > 0).reduce((s, p) => s + p.amount, 0);
-                        const totalCredited = inv.payments.filter(p => p.amount < 0).reduce((s, p) => s + Math.abs(p.amount), 0);
-                        const newBalance = newTotalAmount - totalPaid - totalCredited;
-                        const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (totalPaid > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
+                        const paidAmount = updatedInvoice.totalAmount - updatedInvoice.balance;
+                        const newBalance = newTotalAmount - paidAmount;
+                        const newStatus = newBalance <= 0 ? InvoiceStatus.PAID : (paidAmount > 0 ? InvoiceStatus.PARTIAL : InvoiceStatus.PENDING);
                         
                         updatedInvoice = {
                             ...updatedInvoice,
@@ -320,7 +320,7 @@ const useAppData = () => {
                 });
             });
     
-            return [...otherInvoices, ...finalInvoicesForContract.sort((a,b) => a.period.localeCompare(b.period))];
+            return [...otherInvoices, ...finalInvoicesForContract];
         });
     }, [contracts]);
     
@@ -328,16 +328,11 @@ const useAppData = () => {
         setInvoices(prev => prev.map(inv => {
             if (inv.id === invoiceId) {
                 const newPayments = [...inv.payments, { ...payment, id: `payment-${Date.now()}` }];
-                const totalPaid = newPayments.filter(p => p.amount > 0).reduce((sum, p) => sum + p.amount, 0);
-                const totalCredited = newPayments.filter(p => p.amount < 0).reduce((sum, p) => sum + Math.abs(p.amount), 0);
-                const balance = inv.totalAmount - totalPaid - totalCredited;
-
-                let status = InvoiceStatus.PENDING;
-                if (balance <= 0) {
-                    status = InvoiceStatus.PAID;
-                } else if (totalPaid > 0) {
-                    status = InvoiceStatus.PARTIAL;
-                }
+                const paidAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
+                const balance = inv.totalAmount - paidAmount;
+                let status = InvoiceStatus.PARTIAL;
+                if (balance <= 0) status = InvoiceStatus.PAID;
+                if (paidAmount === 0 && balance > 0) status = InvoiceStatus.PENDING;
 
                 return { ...inv, payments: newPayments, balance, status };
             }
@@ -349,16 +344,10 @@ const useAppData = () => {
         setContracts(prev => prev.map(c => {
             if (c.id === contractId) {
                 const newPayments = [...c.depositPayments, { ...payment, id: `payment-deposit-${Date.now()}` }];
-                const totalPaid = newPayments.filter(p => p.amount > 0).reduce((sum, p) => sum + p.amount, 0);
-                const totalCredited = newPayments.filter(p => p.amount < 0).reduce((sum, p) => sum + Math.abs(p.amount), 0);
-                const balance = c.depositAmount - totalPaid - totalCredited;
-                
-                let status = InvoiceStatus.PENDING;
-                 if (balance <= 0) {
-                    status = InvoiceStatus.PAID;
-                } else if (totalPaid > 0) {
-                    status = InvoiceStatus.PARTIAL;
-                }
+                const paidAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
+                const balance = c.depositAmount - paidAmount;
+                let status = InvoiceStatus.PARTIAL;
+                if (balance <= 0) status = InvoiceStatus.PAID;
                 
                 return { ...c, depositPayments: newPayments, depositBalance: balance, depositStatus: status };
             }
@@ -370,30 +359,30 @@ const useAppData = () => {
         setSettings(newSettings);
     }, []);
 
-    const addBooking = useCallback((newBooking: Omit<Booking, 'id' | 'status' | 'balance' | 'payments'>) => {
-        const id = `booking-${Date.now()}`;
-        setBookings(prev => [...prev, {
-            ...newBooking, 
+    const addBooking = useCallback((newBookingData: Omit<Booking, 'id' | 'status' | 'balance' | 'payments'>): Booking => {
+        const id = `booking-${crypto.randomUUID()}`;
+        const newBooking: Booking = {
+            ...newBookingData,
             id,
             payments: [],
-            balance: newBooking.totalAmount,
+            balance: newBookingData.totalAmount,
             status: BookingStatus.PENDING,
-        }]);
+        };
+        setBookings(prev => [...prev, newBooking]);
+        return newBooking;
     }, []);
     
     const addBookingPayment = useCallback((bookingId: string, payment: Omit<Payment, 'id'>) => {
         setBookings(prev => prev.map(book => {
             if (book.id === bookingId) {
                 const newPayments = [...book.payments, { ...payment, id: `payment-booking-${Date.now()}` }];
-                const totalPaid = newPayments.filter(p => p.amount > 0).reduce((sum, p) => sum + p.amount, 0);
-                const totalCredited = newPayments.filter(p => p.amount < 0).reduce((sum, p) => sum + Math.abs(p.amount), 0);
-                const balance = book.totalAmount - totalPaid - totalCredited;
-                
-                let status = BookingStatus.PENDING;
+                const paidAmount = newPayments.reduce((sum, p) => sum + p.amount, 0);
+                const balance = book.totalAmount - paidAmount;
+                let status = BookingStatus.PARTIAL;
                 if (balance <= 0) {
                     status = BookingStatus.PAID;
-                } else if (totalPaid > 0) {
-                    status = BookingStatus.PARTIAL;
+                } else if (paidAmount === 0 && balance > 0) {
+                    status = BookingStatus.PENDING;
                 }
                 return { ...book, payments: newPayments, balance, status };
             }
@@ -927,7 +916,7 @@ const CalendarComponent: React.FC<{ bookings: Booking[] }> = ({ bookings }) => {
         })), [bookings]);
 
     const isBooked = (day: Date) => {
-        return bookedRanges.some(range => day >= range.start && day <= range.end);
+        return bookedRanges.some(range => day >= range.start && day < range.end);
     };
 
     const handlePrevMonth = () => {
@@ -972,7 +961,7 @@ const CalendarComponent: React.FC<{ bookings: Booking[] }> = ({ bookings }) => {
                 <button onClick={handleNextMonth} className="p-2 rounded-full hover:bg-gray-700"><ChevronRight /></button>
             </div>
             <div className="grid grid-cols-7 gap-1 text-sm text-center text-gray-400 mb-2">
-                {['D', 'L', 'M', 'M', 'J', 'V', 'S'].map(day => <div key={day}>{day}</div>)}
+                {['D', 'L', 'M', 'M', 'J', 'V', 'S'].map((day, index) => <div key={day+index}>{day}</div>)}
             </div>
             <div className="grid grid-cols-7 gap-y-2 items-center justify-items-center">
                 {renderCalendar()}
@@ -986,25 +975,40 @@ const BookingFormModal: React.FC<{
     isOpen: boolean;
     onClose: () => void;
     unitId?: string;
-    addBooking: (booking: Omit<Booking, 'id' | 'status' | 'balance' | 'payments'>) => void;
+    addBooking: (booking: Omit<Booking, 'id' | 'status' | 'balance' | 'payments'>) => Booking;
 }> = ({ isOpen, onClose, unitId, addBooking }) => {
     const { settings } = useApp();
     const [guestName, setGuestName] = useState('');
+    const [docNumber, setDocNumber] = useState('');
+    const [nationality, setNationality] = useState('');
+    const [phone, setPhone] = useState('');
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
     const [guestCount, setGuestCount] = useState(1);
     const [totalAmount, setTotalAmount] = useState(0);
     const [deposit, setDeposit] = useState(0);
+    const [isManualTotal, setIsManualTotal] = useState(false);
+    const [isManualDeposit, setIsManualDeposit] = useState(false);
 
+    const handleStartDateChange = (date: string) => {
+        setStartDate(date);
+        if (date) {
+            const start = new Date(date + 'T00:00:00');
+            start.setDate(start.getDate() + 1);
+            setEndDate(start.toISOString().split('T')[0]);
+        } else {
+            setEndDate('');
+        }
+    };
+    
     useEffect(() => {
-        if (!startDate || !endDate || guestCount < 1) {
-            setTotalAmount(0);
+        if (!startDate || !endDate || guestCount < 1 || isManualTotal) {
             return;
         }
 
         const start = new Date(startDate + 'T00:00:00');
         const end = new Date(endDate + 'T00:00:00');
-        if (start > end) {
+        if (start >= end) {
             setTotalAmount(0);
             return;
         }
@@ -1024,16 +1028,17 @@ const BookingFormModal: React.FC<{
         const newTotal = nights * dailyRate;
         setTotalAmount(newTotal);
 
-    }, [startDate, endDate, guestCount, settings.dailyRates]);
+    }, [startDate, endDate, guestCount, settings.dailyRates, isManualTotal]);
 
     useEffect(() => {
+        if (isManualDeposit) return;
         if (totalAmount > 0) {
             const newDeposit = (totalAmount * settings.bookingDepositPercentage) / 100;
             setDeposit(newDeposit);
         } else {
             setDeposit(0);
         }
-    }, [totalAmount, settings.bookingDepositPercentage]);
+    }, [totalAmount, settings.bookingDepositPercentage, isManualDeposit]);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
@@ -1044,22 +1049,32 @@ const BookingFormModal: React.FC<{
         addBooking({
             unitId,
             guestName,
+            docNumber,
+            nationality,
+            phone,
             startDate,
             endDate,
             guestCount,
             totalAmount,
             deposit,
         });
-        onClose();
+        // The rest of the flow (closing this modal & opening payment modal) is handled in DailyView
     };
     
     // Reset form on close
     useEffect(() => {
         if(!isOpen) {
             setGuestName('');
+            setDocNumber('');
+            setNationality('');
+            setPhone('');
             setStartDate('');
             setEndDate('');
             setGuestCount(1);
+            setTotalAmount(0);
+            setDeposit(0);
+            setIsManualTotal(false);
+            setIsManualDeposit(false);
         }
     }, [isOpen]);
 
@@ -1067,26 +1082,35 @@ const BookingFormModal: React.FC<{
         <Modal isOpen={isOpen} onClose={onClose} title="Nueva Reserva">
             <form onSubmit={handleSubmit} className="space-y-4">
                 <Input label="Nombre del Huésped" value={guestName} onChange={e => setGuestName(e.target.value)} required />
+                 <div className="grid grid-cols-2 gap-4">
+                    <Input label="Nro. Documento" value={docNumber} onChange={e => setDocNumber(e.target.value)} required />
+                    <Input label="Nacionalidad" value={nationality} onChange={e => setNationality(e.target.value)} required />
+                 </div>
+                <Input label="Teléfono" value={phone} onChange={e => setPhone(e.target.value)} required />
                 <div className="grid grid-cols-2 gap-4">
-                    <Input label="Fecha de Entrada" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} required />
+                    <Input label="Fecha de Entrada" type="date" value={startDate} onChange={e => handleStartDateChange(e.target.value)} required />
                     <Input label="Fecha de Salida" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} required />
                 </div>
                 <Input label="Cantidad de Huéspedes" type="number" min="1" value={guestCount} onChange={e => setGuestCount(parseInt(e.target.value, 10) || 1)} required />
                 
-                <div className="bg-gray-700 p-3 rounded-md space-y-2">
-                    <div className="flex justify-between">
-                        <span className="text-gray-300">Monto Total:</span>
-                        <span className="font-bold">${totalAmount.toLocaleString()}</span>
-                    </div>
-                     <div className="flex justify-between">
-                        <span className="text-gray-300">Depósito ({settings.bookingDepositPercentage}%):</span>
-                        <span className="font-bold">${deposit.toLocaleString()}</span>
-                    </div>
+                <div className="bg-gray-700/50 p-3 rounded-md space-y-2">
+                    <Input 
+                        label="Monto Total" 
+                        type="number" 
+                        value={totalAmount} 
+                        onChange={e => { setTotalAmount(parseFloat(e.target.value) || 0); setIsManualTotal(true); }}
+                    />
+                    <Input 
+                        label={`Depósito (${isManualDeposit ? 'Manual' : `${settings.bookingDepositPercentage}%`})`}
+                        type="number" 
+                        value={deposit} 
+                        onChange={e => { setDeposit(parseFloat(e.target.value) || 0); setIsManualDeposit(true); }}
+                    />
                 </div>
 
                 <div className="flex justify-end gap-2 pt-4">
                     <Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button>
-                    <Button type="submit">Crear Reserva</Button>
+                    <Button type="submit">Crear y Pagar Depósito</Button>
                 </div>
             </form>
         </Modal>
@@ -1107,11 +1131,15 @@ const BookingPaymentModal: React.FC<{
 
     useEffect(() => {
         if (booking) {
-            setAmount(booking.balance > 0 ? booking.balance : 0);
+            // If it's a new booking, pre-fill with deposit amount. Otherwise, pre-fill with balance.
+            const isNewBookingWithDeposit = booking.payments.length === 0 && booking.deposit > 0;
+            const paymentAmount = isNewBookingWithDeposit ? booking.deposit : (booking.balance > 0 ? booking.balance : 0);
+
+            setAmount(paymentAmount);
             setPayerName(booking.guestName);
             setDate(new Date().toISOString().split('T')[0]);
             setMethod('transferencia');
-            setObservations('');
+            setObservations(isNewBookingWithDeposit ? 'Pago de depósito de reserva' : '');
         }
     }, [booking]);
 
@@ -1151,11 +1179,52 @@ const DailyView: React.FC<{ setView: (view: View) => void }> = ({ setView }) => 
     const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
 
     const dailyUnits = units.filter(u => u.type === UnitType.APARTMENT_DAILY);
-    const unitBookings = selectedUnit ? bookings.filter(b => b.unitId === selectedUnit.id).sort((a,b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime()) : [];
+    
+    const unitBookings = useMemo(() => {
+        if (!selectedUnit) return [];
 
-    const handleAddBooking = (bookingData: Omit<Booking, 'id' | 'status' | 'balance' | 'payments'>) => {
-        addBooking(bookingData);
+        const allUnitBookings = bookings.filter(b => b.unitId === selectedUnit.id);
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+
+        const pendingAndPartialBookings = allUnitBookings.filter(b =>
+            b.status === BookingStatus.PENDING || b.status === BookingStatus.PARTIAL
+        );
+
+        const activeAndFuturePaidBookings = allUnitBookings.filter(b => {
+            const endDate = new Date(b.endDate + 'T00:00:00');
+            return b.status === BookingStatus.PAID && endDate >= now;
+        });
+        
+        const pastPaidBookings = allUnitBookings
+            .filter(b => {
+                const endDate = new Date(b.endDate + 'T00:00:00');
+                return b.status === BookingStatus.PAID && endDate < now;
+            })
+            .sort((a, b) => new Date(b.endDate).getTime() - new Date(a.endDate).getTime());
+        
+        const lastPastPaidBooking = pastPaidBookings.length > 0 ? [pastPaidBookings[0]] : [];
+
+        const combined = [
+            ...pendingAndPartialBookings,
+            ...activeAndFuturePaidBookings,
+            ...lastPastPaidBooking
+        ];
+
+        const uniqueBookings = Array.from(new Map(combined.map(item => [item.id, item])).values());
+
+        return uniqueBookings.sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+
+    }, [bookings, selectedUnit]);
+
+
+    const handleAddBooking = (bookingData: Omit<Booking, 'id' | 'status' | 'balance' | 'payments'>): Booking => {
+        const newBooking = addBooking(bookingData);
         setBookingModalOpen(false);
+        // Immediately open payment modal for the deposit
+        setSelectedBooking(newBooking);
+        setPaymentModalOpen(true);
+        return newBooking;
     };
 
     const handleAddPayment = (paymentData: Omit<Payment, 'id'>) => {
@@ -1164,6 +1233,46 @@ const DailyView: React.FC<{ setView: (view: View) => void }> = ({ setView }) => 
             setPaymentModalOpen(false);
             setSelectedBooking(null);
         }
+    };
+
+    const handleExportBookings = () => {
+        if (!selectedUnit || unitBookings.length === 0) {
+            alert('No hay reservas para exportar para esta unidad.');
+            return;
+        }
+
+        const headers = [
+            "ID Reserva", "Huésped", "Nro. Documento", "Nacionalidad", "Teléfono", 
+            "Fecha Entrada", "Fecha Salida", "Cant. Huéspedes", "Monto Total", 
+            "Depósito", "Saldo", "Estado"
+        ];
+
+        const csvContent = "data:text/csv;charset=utf-8,"
+            + headers.join(",") + "\n"
+            + unitBookings.map(b => [
+                b.id,
+                `"${b.guestName}"`,
+                `"${b.docNumber || ''}"`,
+                `"${b.nationality || ''}"`,
+                `"${b.phone || ''}"`,
+                new Date(b.startDate + 'T00:00:00').toLocaleDateString(),
+                new Date(b.endDate + 'T00:00:00').toLocaleDateString(),
+                b.guestCount,
+                b.totalAmount,
+                b.deposit,
+                b.balance,
+                b.status
+            ].join(",")).join("\n");
+
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        const date = new Date().toISOString().split('T')[0];
+        const unitName = selectedUnit.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+        link.setAttribute("download", `reservas_${unitName}_${date}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
     };
 
     return (
@@ -1183,7 +1292,12 @@ const DailyView: React.FC<{ setView: (view: View) => void }> = ({ setView }) => 
                 <div>
                      <div className="flex justify-between items-center mb-4">
                         <h2 className="text-2xl font-bold">{selectedUnit.name}</h2>
-                        <Button onClick={() => setBookingModalOpen(true)}><PlusCircle size={16}/> Nueva Reserva</Button>
+                        <div className="flex items-center gap-2">
+                           <Button onClick={handleExportBookings} variant="secondary">
+                                <FileDown size={16}/> Exportar
+                            </Button>
+                           <Button onClick={() => setBookingModalOpen(true)}><PlusCircle size={16}/> Nueva Reserva</Button>
+                        </div>
                      </div>
 
                     <CalendarComponent bookings={unitBookings} />
@@ -1321,9 +1435,12 @@ const CalendarView: React.FC<{ setView: (view: View) => void }> = ({ setView }) 
     );
 };
 
+type ReportTab = 'income' | 'occupancy';
+
 const ReportsView: React.FC<{ setView: (view: View) => void }> = ({ setView }) => {
     const { invoices, contracts, bookings, units } = useApp();
     const [filter, setFilter] = useState({ year: new Date().getFullYear().toString(), month: 'all', unitId: 'all' });
+    const [activeTab, setActiveTab] = useState<ReportTab>('income');
     const printRef = useRef(null);
     
     const allUnits = useMemo(() => units, [units]);
@@ -1332,48 +1449,98 @@ const ReportsView: React.FC<{ setView: (view: View) => void }> = ({ setView }) =
         return allUnits.find(u => u.id === unitId)?.name || 'N/A';
     }, [allUnits]);
 
-    const reportData = useMemo(() => {
+    const incomeReportData = useMemo(() => {
         let allPayments: (Payment & { type: string; details: string; unitId: string })[] = [];
+        const isDateInFilter = (date: Date) => {
+            return (filter.year === 'all' || date.getFullYear().toString() === filter.year) &&
+                   (filter.month === 'all' || (date.getMonth() + 1).toString() === filter.month);
+        };
 
         invoices.forEach(inv => {
-            inv.payments.forEach(p => {
-                const paymentDate = new Date(p.date);
-                if ((filter.year === 'all' || paymentDate.getFullYear().toString() === filter.year) &&
-                    (filter.month === 'all' || (paymentDate.getMonth() + 1).toString() === filter.month) &&
-                    (filter.unitId === 'all' || inv.unitId === filter.unitId)) {
-                    allPayments.push({ ...p, type: 'Alquiler Mensual', details: `Factura ${inv.period}`, unitId: inv.unitId });
-                }
-            });
+             if (filter.unitId === 'all' || inv.unitId === filter.unitId) {
+                inv.payments.forEach(p => {
+                    if (isDateInFilter(new Date(p.date))) {
+                        allPayments.push({ ...p, type: 'Alquiler Mensual', details: `Factura ${inv.period}`, unitId: inv.unitId });
+                    }
+                });
+            }
         });
 
         contracts.forEach(c => {
-            c.depositPayments.forEach(p => {
-                const paymentDate = new Date(p.date);
-                if ((filter.year === 'all' || paymentDate.getFullYear().toString() === filter.year) &&
-                    (filter.month === 'all' || (paymentDate.getMonth() + 1).toString() === filter.month) &&
-                    (filter.unitId === 'all' || c.unitId === filter.unitId)) {
-                    allPayments.push({ ...p, type: 'Depósito', details: `Contrato ${c.tenantName}`, unitId: c.unitId });
-                }
-            });
+             if (filter.unitId === 'all' || c.unitId === filter.unitId) {
+                c.depositPayments.forEach(p => {
+                    if (isDateInFilter(new Date(p.date))) {
+                        allPayments.push({ ...p, type: 'Depósito', details: `Contrato ${c.tenantName}`, unitId: c.unitId });
+                    }
+                });
+            }
         });
 
         bookings.forEach(b => {
-            b.payments.forEach(p => {
-                const paymentDate = new Date(p.date);
-                 if ((filter.year === 'all' || paymentDate.getFullYear().toString() === filter.year) &&
-                    (filter.month === 'all' || (paymentDate.getMonth() + 1).toString() === filter.month) &&
-                    (filter.unitId === 'all' || b.unitId === filter.unitId)) {
-                    allPayments.push({ ...p, type: 'Alquiler Diario', details: `Reserva ${b.guestName}`, unitId: b.unitId });
-                }
-            });
+            if (filter.unitId === 'all' || b.unitId === filter.unitId) {
+                b.payments.forEach(p => {
+                    if (isDateInFilter(new Date(p.date))) {
+                        allPayments.push({ ...p, type: 'Alquiler Diario', details: `Reserva ${b.guestName}`, unitId: b.unitId });
+                    }
+                });
+            }
         });
 
         return allPayments.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     }, [invoices, contracts, bookings, filter]);
     
-    const totalIncome = useMemo(() => reportData.reduce((sum, p) => sum + p.amount, 0), [reportData]);
+    const occupancyReportData = useMemo(() => {
+        const dailyUnits = units.filter(u => u.type === UnitType.APARTMENT_DAILY);
+        let targetUnits = dailyUnits;
+        if (filter.unitId !== 'all') {
+            targetUnits = dailyUnits.filter(u => u.id === filter.unitId);
+        }
+        
+        const year = parseInt(filter.year);
+        const month = filter.month === 'all' ? -1 : parseInt(filter.month) - 1;
+        const startDate = new Date(year, month === -1 ? 0 : month, 1);
+        const endDate = new Date(year, month === -1 ? 11 : month + 1, 1);
+        
+        const daysInPeriod = (endDate.getTime() - startDate.getTime()) / (1000 * 3600 * 24);
+        const totalAvailableNights = daysInPeriod * targetUnits.length;
+        
+        const filteredBookings = bookings.filter(b => {
+             const unitMatch = targetUnits.some(u => u.id === b.unitId);
+             if (!unitMatch) return false;
+
+             const bookingStart = new Date(b.startDate + 'T00:00:00');
+             return bookingStart >= startDate && bookingStart < endDate;
+        });
+
+        let totalBookedNights = 0;
+        let totalIncome = 0;
+
+        filteredBookings.forEach(b => {
+            const start = new Date(b.startDate + 'T00:00:00');
+            const end = new Date(b.endDate + 'T00:00:00');
+            const nights = Math.ceil((end.getTime() - start.getTime()) / (1000 * 3600 * 24));
+            totalBookedNights += nights > 0 ? nights : 0;
+            totalIncome += b.payments.reduce((sum, p) => sum + p.amount, 0);
+        });
+
+        const occupancyRate = totalAvailableNights > 0 ? (totalBookedNights / totalAvailableNights) * 100 : 0;
+        const totalStays = filteredBookings.length;
+        const avgStayDuration = totalStays > 0 ? totalBookedNights / totalStays : 0;
+
+        return {
+            totalBookedNights,
+            totalIncome,
+            occupancyRate,
+            totalStays,
+            avgStayDuration,
+        };
+    }, [bookings, units, filter]);
+
+
+    const totalIncome = useMemo(() => incomeReportData.reduce((sum, p) => sum + p.amount, 0), [incomeReportData]);
     
     const handlePrint = () => {
+        // Simple print for now, can be improved to print the active tab
         const printWindow = window.open('', '', 'height=800,width=1000');
         if (printWindow && printRef.current) {
             const content = (printRef.current as HTMLDivElement).innerHTML;
@@ -1394,7 +1561,7 @@ const ReportsView: React.FC<{ setView: (view: View) => void }> = ({ setView }) =
         const headers = ["Fecha", "Departamento", "Tipo", "Detalles", "Pagador", "Método", "Observaciones", "Monto"];
         const csvContent = "data:text/csv;charset=utf-8," 
             + headers.join(",") + "\n" 
-            + reportData.map(p => [
+            + incomeReportData.map(p => [
                 new Date(p.date).toLocaleDateString(),
                 `"${getUnitName(p.unitId)}"`,
                 p.type,
@@ -1415,16 +1582,37 @@ const ReportsView: React.FC<{ setView: (view: View) => void }> = ({ setView }) =
     };
 
     const years = [...new Set(
-        [...invoices, ...contracts, ...bookings].flatMap(item => 'payments' in item ? item.payments : item.depositPayments).map(p => new Date(p.date).getFullYear())
+        [...invoices, ...contracts, ...bookings].flatMap(item => 'payments' in item ? item.payments : ('depositPayments' in item ? item.depositPayments : [])).map(p => new Date(p.date).getFullYear())
     )].sort((a,b) => b-a);
     
+    const TabButton: React.FC<{tab: ReportTab; label: string; icon: React.ElementType}> = ({tab, label, icon: Icon}) => (
+        <button 
+            onClick={() => setActiveTab(tab)}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+                activeTab === tab 
+                ? 'bg-gray-800 text-white'
+                : 'text-gray-400 hover:bg-gray-700/50'
+            }`}
+        >
+            <Icon size={16} />
+            {label}
+        </button>
+    );
+
     return (
         <Page title="Reportes" onBack={() => setView('DASHBOARD')} actions={
-            <>
-                <Button onClick={handlePrint} variant="secondary"><Printer size={16}/> Imprimir</Button>
-                <Button onClick={handleExport} variant="secondary"><FileDown size={16}/> Exportar</Button>
-            </>
+             activeTab === 'income' && (
+                <>
+                    <Button onClick={handlePrint} variant="secondary"><Printer size={16}/> Imprimir</Button>
+                    <Button onClick={handleExport} variant="secondary"><FileDown size={16}/> Exportar</Button>
+                </>
+             )
         }>
+            <div className="flex border-b border-gray-700 mb-6">
+                <TabButton tab="income" label="Ingresos" icon={DollarSign} />
+                <TabButton tab="occupancy" label="Análisis de Ocupación" icon={TrendingUp} />
+            </div>
+
             <Card>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 p-4 bg-gray-700/50 rounded-lg">
                     <Select label="Año" value={filter.year} onChange={e => setFilter(f => ({...f, year: e.target.value}))}>
@@ -1439,38 +1627,72 @@ const ReportsView: React.FC<{ setView: (view: View) => void }> = ({ setView }) =
                        {allUnits.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                     </Select>
                 </div>
+                
+                {activeTab === 'income' && (
+                     <>
+                        <div className="mb-4 text-right">
+                            <h3 className="text-xl font-bold">Total Ingresos: <span className="text-green-400">${totalIncome.toLocaleString()}</span></h3>
+                        </div>
 
-                <div className="mb-4 text-right">
-                    <h3 className="text-xl font-bold">Total Ingresos: <span className="text-green-400">${totalIncome.toLocaleString()}</span></h3>
-                </div>
+                        <div className="overflow-x-auto" ref={printRef}>
+                            <table className="min-w-full divide-y divide-gray-700">
+                                <thead className="bg-gray-700">
+                                    <tr>
+                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Fecha</th>
+                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Departamento</th>
+                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Tipo</th>
+                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Detalles</th>
+                                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Monto</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-gray-800 divide-y divide-gray-700">
+                                    {incomeReportData.map(p => (
+                                        <tr key={p.id}>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{new Date(p.date).toLocaleDateString()}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{getUnitName(p.unitId)}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{p.type}</td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{p.details}</td>
+                                            <td className={`px-6 py-4 whitespace-nowrap text-sm font-semibold ${p.amount < 0 ? 'text-yellow-400' : 'text-green-400'}`}>
+                                                {p.amount.toLocaleString('es-AR', { style: 'currency', currency: 'ARS' })}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        {incomeReportData.length === 0 && <p className="text-center text-gray-400 mt-6">No hay datos para los filtros seleccionados.</p>}
+                     </>
+                )}
 
-                <div className="overflow-x-auto" ref={printRef}>
-                    <table className="min-w-full divide-y divide-gray-700">
-                        <thead className="bg-gray-700">
-                            <tr>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Fecha</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Departamento</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Tipo</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Detalles</th>
-                                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase tracking-wider">Monto</th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-gray-800 divide-y divide-gray-700">
-                            {reportData.map(p => (
-                                <tr key={p.id}>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{new Date(p.date).toLocaleDateString()}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{getUnitName(p.unitId)}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{p.type}</td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-300">{p.details}</td>
-                                    <td className={`px-6 py-4 whitespace-nowrap text-sm font-semibold ${p.amount < 0 ? 'text-yellow-400' : 'text-green-400'}`}>
-                                        {p.amount.toLocaleString('es-AR', { style: 'currency', currency: 'ARS' })}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-                {reportData.length === 0 && <p className="text-center text-gray-400 mt-6">No hay datos para los filtros seleccionados.</p>}
+                {activeTab === 'occupancy' && (
+                    <div>
+                        <h3 className="text-xl font-bold mb-4">Análisis de Ocupación (Alquileres Diarios)</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            <div className="bg-gray-700 p-4 rounded-lg">
+                                <p className="text-sm text-gray-400">Tasa de Ocupación</p>
+                                <p className="text-3xl font-bold text-indigo-400">{occupancyReportData.occupancyRate.toFixed(1)}<span className="text-xl">%</span></p>
+                            </div>
+                             <div className="bg-gray-700 p-4 rounded-lg">
+                                <p className="text-sm text-gray-400">Ingresos Totales (Diario)</p>
+                                <p className="text-3xl font-bold text-green-400">${occupancyReportData.totalIncome.toLocaleString()}</p>
+                            </div>
+                            <div className="bg-gray-700 p-4 rounded-lg">
+                                <p className="text-sm text-gray-400">Total Noches Reservadas</p>
+                                <p className="text-3xl font-bold">{occupancyReportData.totalBookedNights}</p>
+                            </div>
+                            <div className="bg-gray-700 p-4 rounded-lg">
+                                <p className="text-sm text-gray-400">Total de Reservas</p>
+                                <p className="text-3xl font-bold">{occupancyReportData.totalStays}</p>
+                            </div>
+                            <div className="bg-gray-700 p-4 rounded-lg">
+                                <p className="text-sm text-gray-400">Estadía Promedio</p>
+                                <p className="text-3xl font-bold">{occupancyReportData.avgStayDuration.toFixed(1)} <span className="text-xl">noches</span></p>
+                            </div>
+                        </div>
+                        {occupancyReportData.totalStays === 0 && <p className="text-center text-gray-400 mt-6">No hay reservas de alquiler diario para los filtros seleccionados.</p>}
+                    </div>
+                )}
+
             </Card>
         </Page>
     );
